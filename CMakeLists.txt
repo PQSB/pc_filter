@@ -24,15 +24,23 @@ add_library(${PROJECT_NAME} SHARED
 )
 ament_target_dependencies(${PROJECT_NAME} ${dependencies})
 
+# Add my library
+add_library(pc_filter_lib SHARED
+  src/pc_filter/pc_filter_lib.cpp 
+)
+ament_target_dependencies(pc_filter_lib ${dependencies})
+
 add_executable(pc_filter_node src/pc_filter_main.cpp)
 ament_target_dependencies(pc_filter_node ${dependencies})
-target_link_libraries(pc_filter_node ${PROJECT_NAME})
+target_link_libraries(pc_filter_node ${PROJECT_NAME} pc_filter_lib)
 
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY include/ DESTINATION include)
 
 install(TARGETS
   ${PROJECT_NAME}
   pc_filter_node
+  pc_filter_lib
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
