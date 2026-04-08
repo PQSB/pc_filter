@@ -48,7 +48,7 @@ PCFilterNode::PCFilterNode()
 void PCFilterNode::filter_cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
   sensor_msgs::msg::PointCloud2 filtered_msg;
-  filter_cloud(msg, filtered_msg);
+  filter_cloud_fov_2d(msg, filtered_msg);
 
   // Publicar la nube de puntos filtrada
   filtered_pc_pub_->publish(filtered_msg);
