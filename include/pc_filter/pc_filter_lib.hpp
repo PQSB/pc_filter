@@ -6,7 +6,11 @@
 namespace pc_filter
 {
 
-void filter_cloud(
+void filter_cloud_x(
+    const sensor_msgs::msg::PointCloud2::SharedPtr msg,
+    sensor_msgs::msg::PointCloud2 &filtered_msg);
+
+void filter_cloud_fov_2d(
     const sensor_msgs::msg::PointCloud2::SharedPtr msg,
     sensor_msgs::msg::PointCloud2 &filtered_msg);
 
