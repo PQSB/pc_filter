@@ -24,6 +24,14 @@
 constexpr double MIN_SCORE = 0.0;
 constexpr double MAX_SCORE = 1.0;
 
+struct Detection {
+    std::string category;
+    float x, y, z;
+    float w, l, h;
+    float ry;
+    float score;
+};
+
 int
 load_sync_map(
     std::ifstream& csv_file,
@@ -111,11 +119,54 @@ print_help(const char* prog_name)
               << "  -h, --help                 Show this help message\n";
 }
 
+std::vector<Detection>
+load_detections_from_file(
+        const std::string& det_path,
+        const float min_score)
+{
+    std::vector<Detection> detections;
+
+    // Argument validation
+    if (!std::filesystem::exists(det_path)) {
+        std::cerr << "[WARN] Detections file: " << det_path << " does not exists\n";
+        return detections;
+    }
+
+    std::ifstream file(det_path);
+    if (!file.is_open()) {
+        std::cerr << "[ERROR] Detections file: " << det_path << "can't be oppened\n";
+        return detections;
+    }
+
+    std::string line;
+
+    while (std::getline(file, line)) {
+        if (line.empty()) continue;
+
+        std::stringstream ss(line);
+        Detection det;
+
+        ss >> det.category
+           >> det.x >> det.y >> det.z
+           >> det.w >> det.l >> det.h
+           >> det.ry
+           >> det.score;
+
+        if (!ss.fail() && det.score >= min_score) {
+            detections.push_back(det);
+        }
+    }
+
+    return detections;
+}
+
 void
 filter_rosbag_point_clouds(
     const std::string& input_bag,
     const std::string& output_bag,
     const std::string target_topic,
+    const std::string detections_folder,
+    const float min_score,
     const std::map<std::string, std::string>& sync_map)
 {
     rosbag2_cpp::Reader reader;
@@ -171,7 +222,15 @@ filter_rosbag_point_clouds(
             }
 
             std::string det_name = sync_map.at(ts_key);
+            std::string det_path = detections_folder + "/" + det_name;
 
+            auto detections = load_detections_from_file(det_path, min_score);
+
+            // Create full path to the detecions file
+            if (detections.empty()) {
+                std::cout << "[INFO] No detections found in file " << det_name  << std::endl;
+                continue;
+            }
             // cargar las detecciones del fichero
             // llamar a la función para filtrar
 
