@@ -20,6 +20,8 @@
 #include <rosbag2_storage/storage_options.hpp>
 #include <rosbag2_cpp/converter_options.hpp>
 
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
 
 constexpr double MIN_SCORE = 0.0;
 constexpr double MAX_SCORE = 1.0;
@@ -119,12 +121,12 @@ print_help(const char* prog_name)
               << "  -h, --help                 Show this help message\n";
 }
 
-std::vector<Detection>
+std::shared_ptr<std::vector<Detection>>
 load_detections_from_file(
         const std::string& det_path,
         const float min_score)
 {
-    std::vector<Detection> detections;
+    auto detections = std::make_shared<std::vector<Detection>>();
 
     // Argument validation
     if (!std::filesystem::exists(det_path)) {
@@ -153,11 +155,63 @@ load_detections_from_file(
            >> det.score;
 
         if (!ss.fail() && det.score >= min_score) {
-            detections.push_back(det);
+            detections->push_back(det);
         }
     }
 
     return detections;
+}
+
+pcl::PointCloud<pcl::PointXYZ>::Ptr
+loadPointCloud(const std::string& filepath, const size_t channels)
+{
+    auto cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+
+    // Check if the file exists
+    if (!std::filesystem::exists(filepath)) {
+        std::cerr << "[WARN] Point cloud file: " << filepath << " does not exists\n";
+        return cloud; 
+    }
+
+    // Check if there are 3 or more channels
+    if (channels < 3) {
+        std::cerr << "[WARN] Channel number must be >= 3\n";
+        return cloud;
+    }
+
+    // Open the file
+    std::ifstream file(filepath, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "[ERROR] Point cloud file: " << filepath << "can't be oppened\n";
+        return cloud;
+    }
+
+    // Get the total size of the file
+    const size_t file_size = std::filesystem::file_size(filepath);
+
+    // Calculate the number of points of the point cloud
+    const size_t num_points = file_size / (channels * sizeof(float));
+
+    cloud->points.resize(num_points);
+
+    std::vector<float> buffer(channels);
+
+    for (size_t i = 0; i < num_points; ++i)
+    {
+        if (!file.read(reinterpret_cast<char*>(buffer.data()), channels * sizeof(float))) {
+            throw std::runtime_error("Error leyendo punto " + std::to_string(i));
+        }
+
+        cloud->points[i].x = buffer[0];
+        cloud->points[i].y = buffer[1];
+        cloud->points[i].z = buffer[2];
+    }
+
+    cloud->width = num_points;
+    cloud->height = 1;
+    cloud->is_dense = true;
+
+    return cloud;
 }
 
 void
@@ -166,6 +220,7 @@ filter_rosbag_point_clouds(
     const std::string& output_bag,
     const std::string target_topic,
     const std::string detections_folder,
+    const std::string pc_folder,
     const float min_score,
     const std::map<std::string, std::string>& sync_map)
 {
@@ -217,7 +272,7 @@ filter_rosbag_point_clouds(
             std::string ts_key = std::to_string(ts);
 
             if (!sync_map.contains(ts_key)) {
-                std::cerr << "Message with timestamp " << ts_key << "found in rosbag\n";
+                std::cerr << "Can't find message with timestamp " << ts_key << "in the rosbag\n";
                 continue;
             }
 
@@ -227,11 +282,21 @@ filter_rosbag_point_clouds(
             auto detections = load_detections_from_file(det_path, min_score);
 
             // Create full path to the detecions file
-            if (detections.empty()) {
+            if (detections->empty()) {
                 std::cout << "[INFO] No detections found in file " << det_name  << std::endl;
                 continue;
             }
-            // cargar las detecciones del fichero
+
+            std::string pc_path = pc_folder + "/" + ts_key;
+            auto point_cloud = loadPointCloud(pc_path, 3);
+
+            if (point_cloud->empty()) {
+                std::cout << "[INFO] Point cloud in file " << pc_path << " is empty\n";
+                continue;
+            }
+
+            // cargar la nube de puntos del fichero correspondiente
+
             // llamar a la función para filtrar
 
             std::cout << "....";
