@@ -312,9 +312,22 @@ filter_rosbag_point_clouds(
 
     writer.open(out_storage, out_converter);
 
+    // std::string new_topic_name = target_topic + std::string("/filtered_point_cloud");
+    std::string new_topic_name = "/filtered_point_cloud" + target_topic;
+
     // Create topics in the new rosbag
     for (const auto& topic_info : reader.get_all_topics_and_types()) {
         writer.create_topic(topic_info);
+        // Create the new topic where the filtered point clouds will be published
+        if (topic_info.name == target_topic) {
+            rosbag2_storage::TopicMetadata filtered_topic_info;
+            filtered_topic_info.name = new_topic_name;
+            filtered_topic_info.type = "sensor_msgs/msg/PointCloud2";
+            filtered_topic_info.serialization_format = "cdr";
+            writer.create_topic(filtered_topic_info);
+        }
+
+        std::cout << topic_info.name << "\n";
     }
 
     // Convert allowed_classes a un unordered_set para búsquedas O(1)
@@ -336,6 +349,8 @@ filter_rosbag_point_clouds(
         const std::string& topic = msg->topic_name;
 
         if (topic == target_topic) {
+            writer.write(msg);
+
             sensor_msgs::msg::PointCloud2 cloud_msg;
             
             rclcpp::SerializedMessage serialized_msg(*msg->serialized_data);
@@ -366,15 +381,6 @@ filter_rosbag_point_clouds(
                 detections = load_detections_from_file(det_path, min_score, allowed_set);
             }
 
-            // Create full path to the detecions file
-            if (detections->empty()) {
-                //std::cout << "[INFO] No detections found in file " << det_name << std::endl;
-                writer.write(msg);
-                continue;
-            } //else {
-                //std::cout << "[INFO] " << detections->size() << " detections found in file " << det_name << std::endl;
-            //}
-
             std::string pc_path = pc_folder + "/" + ts_key + ".bin";
             auto point_cloud = loadPointCloudXYZ(pc_path);
 
@@ -383,9 +389,17 @@ filter_rosbag_point_clouds(
                 continue;
             }
 
-            if (pc_filter::filter_detections_from_cloud(detections, point_cloud) < 0) {
-                continue;
-            }
+            // Create full path to the detecions file
+            if (!detections->empty()) {
+                //std::cout << "[INFO] No detections found in file " << det_name << std::endl;
+
+                if (pc_filter::filter_detections_from_cloud(detections, point_cloud) < 0) {
+                    continue;
+                }
+            } //else {
+                //std::cout << "[INFO] " << detections->size() << " detections found in file " << det_name << std::endl;
+            //}
+
 
             // Construir nuevo mensaje usando la nube de puntos filtrada
             sensor_msgs::msg::PointCloud2 new_cloud_msg;
@@ -394,7 +408,9 @@ filter_rosbag_point_clouds(
             new_cloud_msg.header = cloud_msg.header;
 
             // writer.write(new_cloud_msg, topic, rclcpp::Time(msg->recv_timestamp));
-            writer.write<sensor_msgs::msg::PointCloud2>(new_cloud_msg, topic, rclcpp::Time(msg->recv_timestamp));
+            // writer.write<sensor_msgs::msg::PointCloud2>(new_cloud_msg, topic, rclcpp::Time(msg->recv_timestamp));
+            // Wrtie the new cloud in the 
+            writer.write<sensor_msgs::msg::PointCloud2>(new_cloud_msg, new_topic_name, rclcpp::Time(msg->recv_timestamp));
         } else {
             writer.write(msg);
         }
