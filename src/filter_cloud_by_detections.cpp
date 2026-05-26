@@ -151,14 +151,14 @@ loadTransformationMatrix(const std::string& filepath)
     return transform;
 }
 
-std::shared_ptr<std::vector<Detection>>
+std::vector<Detection>
 load_detections_from_file(
         const std::string& det_path,
         const float min_score,
         const std::unordered_set<std::string>& allowed_set,
         const std::optional<Eigen::Matrix4f>& transform_matrix = std::nullopt)
 {
-    auto detections = std::make_shared<std::vector<Detection>>();
+    std::vector<Detection> detections;
 
     // Argument validation
     if (!std::filesystem::exists(det_path)) {
@@ -208,7 +208,7 @@ load_detections_from_file(
                     if (det.ry < -M_PI) det.ry += 2.0f * M_PI;
                 }
 
-                detections->push_back(det);
+                detections.push_back(det);
             }
             
         }
@@ -280,12 +280,14 @@ void
 filter_rosbag_point_clouds(
     const std::string& input_bag,
     const std::string& output_bag,
-    const std::string target_topic,
-    const std::string detections_folder,
-    const std::string pc_folder,
+    const std::string& target_topic,
+    const std::string& detections_folder,
+    const std::string& pc_folder,
     const float min_score,
     const std::vector<std::string>& allowed_classes,
     const std::map<std::string, std::string>& sync_map,
+    const bool cloud_from_camera,
+    const bool include_camera_pc,
     const std::optional<Eigen::Matrix4f>& transform_matrix = std::nullopt)
 {
     rosbag2_cpp::Reader reader;
@@ -313,35 +315,54 @@ filter_rosbag_point_clouds(
     writer.open(out_storage, out_converter);
 
     // std::string new_topic_name = target_topic + std::string("/filtered_point_cloud");
-    std::string new_topic_name = "/filtered_point_cloud" + target_topic;
+    std::string filtered_topic_name = "/filtered_point_cloud" + target_topic;
+    std::string orig_pc_topic_name = "";
 
     // Create topics in the new rosbag
     for (const auto& topic_info : reader.get_all_topics_and_types()) {
         writer.create_topic(topic_info);
         // Create the new topic where the filtered point clouds will be published
         if (topic_info.name == target_topic) {
-            rosbag2_storage::TopicMetadata filtered_topic_info;
-            filtered_topic_info.name = new_topic_name;
-            filtered_topic_info.type = "sensor_msgs/msg/PointCloud2";
-            filtered_topic_info.serialization_format = "cdr";
-            writer.create_topic(filtered_topic_info);
-        }
+            rosbag2_storage::TopicMetadata new_topic_info;
+            new_topic_info.name = filtered_topic_name;
+            new_topic_info.type = "sensor_msgs/msg/PointCloud2";
+            new_topic_info.serialization_format = "cdr";
+            writer.create_topic(new_topic_info);
 
-        std::cout << topic_info.name << "\n";
+            // Create topic to publish the point cloud generated from the depth image (use to compare it with the filtered one)
+            if (cloud_from_camera && include_camera_pc) {
+                orig_pc_topic_name = "/point_cloud_from_depth_img";
+                new_topic_info.name = orig_pc_topic_name;
+                writer.create_topic(new_topic_info);
+            }
+        
+        }
     }
 
     // Convert allowed_classes a un unordered_set para búsquedas O(1)
-    std::unordered_set<std::string> allowed_set;
-    allowed_set.reserve(allowed_classes.size());
-    for (const auto& c : allowed_classes) {
-        allowed_set.insert(c);
-    }
-
-    rclcpp::Serialization<sensor_msgs::msg::PointCloud2> serializer;
+    // std::unordered_set<std::string> allowed_set;
+    // allowed_set.reserve(allowed_classes.size());
+    // for (const auto& c : allowed_classes) {
+    //     allowed_set.insert(c);
+    // }
+    std::unordered_set<std::string> allowed_set(allowed_classes.begin(), allowed_classes.end());
+    // if (cloud_from_camera) {
+    //     rclcpp::Serialization<sensor_msgs::msg::Image> serializer;
+    //     sensor_msgs::msg::Image cloud_msg;
+    // } else {
+    //     rclcpp::Serialization<sensor_msgs::msg::PointCloud2> serializer;
+    //     sensor_msgs::msg::PointCloud2 cloud_msg;
+    // }
 
     char spinner[] = {'|', '/', '-', '\\'};
     long i = 0;
     long interval = 100;
+
+    rclcpp::Serialization<sensor_msgs::msg::Image> img_serializer;
+    rclcpp::Serialization<sensor_msgs::msg::PointCloud2> pc_serializer;
+    sensor_msgs::msg::Image img_msg;
+    sensor_msgs::msg::PointCloud2 cloud_msg;
+    sensor_msgs::msg::PointCloud2 loaded_pc;
 
     std::cout << "[OK] Start generating rosbag with filtered point clouds\n";
     while (reader.has_next()) {
@@ -349,34 +370,45 @@ filter_rosbag_point_clouds(
         const std::string& topic = msg->topic_name;
 
         if (topic == target_topic) {
+            // Keep the original topic msg
             writer.write(msg);
 
-            sensor_msgs::msg::PointCloud2 cloud_msg;
-            
             rclcpp::SerializedMessage serialized_msg(*msg->serialized_data);
 
-            serializer.deserialize_message(&serialized_msg, &cloud_msg);
+            std_msgs::msg::Header cloud_header;
 
-            uint64_t sec = cloud_msg.header.stamp.sec;
-            uint64_t nanosec = cloud_msg.header.stamp.nanosec;
+            if (cloud_from_camera) {
+                img_serializer.deserialize_message(&serialized_msg, &img_msg);
+                cloud_header = img_msg.header;
+            } else {
+                pc_serializer.deserialize_message(&serialized_msg, &cloud_msg);
+                cloud_header = cloud_msg.header;
+            }
+
+            // serializer.deserialize_message(&serialized_msg, &cloud_msg);
+
+            uint64_t sec = cloud_header.stamp.sec;
+            uint64_t nanosec = cloud_header.stamp.nanosec;
 
             uint64_t ts = (sec * 1000000000ULL) + nanosec;
 
             std::string ts_key = std::to_string(ts);
 
-            if (sync_map.find(ts_key) == sync_map.end()) {
+            auto sync_it = sync_map.find(ts_key);
+
+            if (sync_it == sync_map.end()) {
                 std::cerr << "Can't find message with timestamp " << ts_key << " in the rosbag\n";
                 continue;
             }
 
-            std::string det_name = sync_map.at(ts_key);
+            const std::string& det_name = sync_it->second;
             std::string det_path = detections_folder + "/" + det_name + ".txt";
 
-            std::shared_ptr<std::vector<Detection>> detections;
+            std::vector<Detection> detections;
 
             if (transform_matrix.has_value()) {
                 detections = load_detections_from_file(det_path, min_score, allowed_set, transform_matrix);
-            
+
             } else {
                 detections = load_detections_from_file(det_path, min_score, allowed_set);
             }
@@ -389,8 +421,15 @@ filter_rosbag_point_clouds(
                 continue;
             }
 
+            // Publish the original point cloud generated from the depth image before filtering it
+            if (!orig_pc_topic_name.empty()) {
+                pcl::toROSMsg(*point_cloud, loaded_pc);
+                loaded_pc.header = cloud_header;
+                writer.write<sensor_msgs::msg::PointCloud2>(loaded_pc, orig_pc_topic_name, rclcpp::Time(msg->recv_timestamp));
+            }
+
             // Create full path to the detecions file
-            if (!detections->empty()) {
+            if (!detections.empty()) {
                 //std::cout << "[INFO] No detections found in file " << det_name << std::endl;
 
                 if (pc_filter::filter_detections_from_cloud(detections, point_cloud) < 0) {
@@ -405,12 +444,12 @@ filter_rosbag_point_clouds(
             sensor_msgs::msg::PointCloud2 new_cloud_msg;
 
             pcl::toROSMsg(*point_cloud, new_cloud_msg);
-            new_cloud_msg.header = cloud_msg.header;
+            new_cloud_msg.header = cloud_header;
 
             // writer.write(new_cloud_msg, topic, rclcpp::Time(msg->recv_timestamp));
             // writer.write<sensor_msgs::msg::PointCloud2>(new_cloud_msg, topic, rclcpp::Time(msg->recv_timestamp));
             // Wrtie the new cloud in the 
-            writer.write<sensor_msgs::msg::PointCloud2>(new_cloud_msg, new_topic_name, rclcpp::Time(msg->recv_timestamp));
+            writer.write<sensor_msgs::msg::PointCloud2>(new_cloud_msg, filtered_topic_name, rclcpp::Time(msg->recv_timestamp));
         } else {
             writer.write(msg);
         }
@@ -553,7 +592,7 @@ main(int argc, char* argv[]) {
     std::map<std::string, std::string> sync_map;
 
     std::cout << "[OK] Loading sync map...\n";
-    if (load_sync_map(file, "/rslidar_points_timestamp", "/color/image_timestamp", sync_map) < 0) {
+    if (load_sync_map(file, "/stereo/depth_timestamp", "/color/image_timestamp", sync_map) < 0) {
         exit(EXIT_FAILURE);
     }
 
@@ -561,13 +600,13 @@ main(int argc, char* argv[]) {
 
     if (tf_file.empty()) {
         filter_rosbag_point_clouds(
-            rosbag_in, rosbag_out, "/rslidar_points", det_dir, pc_dir, score, allowed_classes, sync_map);
-    
+            rosbag_in, rosbag_out, "/stereo/depth", det_dir, pc_dir, score, allowed_classes, sync_map, true, true);
+
     } else {
         Eigen::Matrix4f transfom_matrix;
         transfom_matrix = loadTransformationMatrix(tf_file);
         filter_rosbag_point_clouds(
-            rosbag_in, rosbag_out, "/rslidar_points", det_dir, pc_dir, score, allowed_classes, sync_map, transfom_matrix);
+            rosbag_in, rosbag_out, "/rslidar_points", det_dir, pc_dir, score, allowed_classes, sync_map, false, false, transfom_matrix);
     }
 
     //TODO
