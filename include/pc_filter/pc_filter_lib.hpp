@@ -30,9 +30,8 @@ void filter_cloud_fov_2d(
 
 int
 filter_detections_from_cloud(
-    const std::shared_ptr<std::vector<Detection>>& dets,
-    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud,
-    const bool from_camera);
+    const std::vector<Detection>& dets,
+    pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud);
 
 }
 
