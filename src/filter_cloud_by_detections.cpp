@@ -151,6 +151,35 @@ loadTransformationMatrix(const std::string& filepath)
     return transform;
 }
 
+/*
+            if cam2velo is not None:
+                R_obj = R.from_quat([qx, qy, qz, qw]).as_matrix()
+
+                T_obj_cam = np.eye(4)
+
+                T_obj_cam[:3, :3] = R_obj
+                T_obj_cam[:3, 3] = [x, y, z]
+
+                T_obj_velo = cam2velo @ T_obj_cam
+
+                x_l, y_l, z_l = T_obj_velo[:3, 3]
+                z_l -= h/2
+
+                R_lidar = T_obj_velo[:3, :3]
+
+                # print(R_lidar)
+
+                # ry_cam = np.arctan2(2 * (qw * qy + qx * qz), 1 - 2 * (qy**2 + qz**2))
+
+                # Convertir ry de cámara a rz de LiDAR (Convención típica de OpenPCDet)
+                # ry_l = -ry_cam - np.pi / 2
+                # ry_l = np.arctan2(np.sin(ry_l), np.cos(ry_l)) # Normalizar
+
+                ry_l = np.arctan2(R_lidar[0, 0], R_lidar[1, 0])
+                ry_l = np.arctan2(np.sin(ry_l), np.cos(ry_l))
+*/
+
+
 std::vector<Detection>
 load_detections_from_file(
         const std::string& det_path,
@@ -180,6 +209,10 @@ load_detections_from_file(
     std::string line;
     std::stringstream ss;
 
+    float x_cam;
+    float y_cam;
+    float z_cam;
+
     while (std::getline(file, line)) {
         if (line.empty()) continue;
 
@@ -188,14 +221,14 @@ load_detections_from_file(
 
         Detection det;
 
-        if (ss >> det.category >> det.x >> det.y >> det.z
+        if (ss >> det.category >> x_cam >> y_cam >> z_cam
             >> det.w >> det.l >> det.h >> det.ry >> det.score) {
         
             if (det.score >= min_score && allowed_set.find(det.category) != allowed_set.end()) {
 
                 if (transform_matrix.has_value()) {
                     // Crear el punto
-                    Eigen::Vector4f point(det.x, det.y, det.z, 1.0f);
+                    Eigen::Vector4f point(x_cam, y_cam, z_cam, 1.0f);
                     // Transformar el punto a coordenadas de lidar
                     Eigen::Vector4f transformed_point = (*transform_matrix) * point;
 
@@ -204,13 +237,23 @@ load_detections_from_file(
                     det.z = transformed_point.z();
 
                     det.ry += delta_yaw;
-                    if (det.ry > M_PI)  det.ry -= 2.0f * M_PI;
-                    if (det.ry < -M_PI) det.ry += 2.0f * M_PI;
+                
+                } else {
+                    det.x = z_cam;
+                    det.y = -x_cam;
+                    det.z = -y_cam;
+
+                    // det.ry = -det.ry - M_PI_2;
+                    det.ry = -det.ry - M_PI_2; // corregir orientación inicial
                 }
+
+                // Normalize the angle
+                while (det.ry > M_PI)  det.ry -= 2.0f * M_PI;
+                while (det.ry < -M_PI) det.ry += 2.0f * M_PI;
 
                 detections.push_back(det);
             }
-            
+
         }
     }
 
