@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <filesystem>
+#include <fstream>
 
 #include <cxxopts.hpp>
 
@@ -30,6 +31,42 @@ struct Config
     std::string filtered_topic;
     std::vector<std::string> classes;
 };
+
+std::vector<int64_t>
+loadTimestamps(const fs::path& ts_file)
+{
+
+    std::ifstream file(ts_file);
+    if (!file.is_open())
+    {
+        throw std::runtime_error("Cannot open timestamp file: " + ts_file.string());
+    }
+
+    std::vector<int64_t> timestamps_ns;
+
+    std::string line;
+    double timestamp_sec;
+
+    while (std::getline(file, line))
+    {
+        // Ignore emepty lines
+        if (line.empty()) continue; 
+
+        // Transform text into double
+        timestamp_sec = std::stod(line);
+
+        // Get the time in nanoseconds
+        timestamps_ns.push_back(static_cast<int64_t>(timestamp_sec * 1e9));
+    }
+
+    // In case the timestamps file is empty
+    if (timestamps_ns.empty())
+    {
+        throw std::runtime_error("Timestamp file is empty: " + ts_file.string());
+    }
+
+    return timestamps_ns;
+}
 
 void
 print_summary(const Config& cfg)
@@ -228,8 +265,11 @@ int main(int argc, char* argv[])
 
         validate(cfg);
         print_summary(cfg);
+        std::cout << "[OK] configuration succesful\n";
 
-        std::cout << "Configuration succesful\n";
+        std::cout << "[INFO] loading timesatmps...\n";
+        std::vector<int64_t> timestamps = loadTimestamps(cfg.ts_file);
+        std::cout << "[OK] timestamps loaded succesfully\n";
 
         exit(EXIT_SUCCESS);
     }
