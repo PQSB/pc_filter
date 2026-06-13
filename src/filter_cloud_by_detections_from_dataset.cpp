@@ -4,6 +4,11 @@
 #include <filesystem>
 #include <fstream>
 
+// ros2 includes
+#include <rosbag2_cpp/writer.hpp>
+#include <rosbag2_storage/storage_options.hpp>
+#include <rosbag2_cpp/converter_options.hpp>
+
 #include <cxxopts.hpp>
 
 namespace fs = std::filesystem;
@@ -103,7 +108,7 @@ print_summary(const Config& cfg)
         for (const auto& c : cfg.classes)
             std::cout << c << " ";
 
-        std::cout << "\n\n";
+        std::cout << "\n";
     }
     else
     {
@@ -251,10 +256,102 @@ parse_arguments(int argc, char* argv[])
 
         cfg.filtered_topic = result["filtered_topic"].as<std::string>();
 
-        cfg.classes =result["classes"].as<std::vector<std::string>>();
+        cfg.classes = result["classes"].as<std::vector<std::string>>();
     }
 
     return cfg;
+}
+
+std::vector<fs::path>
+getPointCloudFiles(const fs::path& pc_dir)
+{
+    std::vector<fs::path> files;
+
+    for (const auto& entry : fs::directory_iterator(pc_dir))
+    {
+        if (!entry.is_regular_file())
+            continue;
+
+        if (entry.path().extension() != ".bin")
+            continue;
+
+        files.push_back(entry.path());
+    }
+
+    // Since bin files have sequential names with the same number of digits
+    std::sort(
+        files.begin(),
+        files.end());
+
+    return files;
+}
+
+void
+createTopics(rosbag2_cpp::Writer& writer, const Config& cfg)
+{
+    rosbag2_storage::TopicMetadata topic_info;
+    topic_info.serialization_format = "cdr";
+
+    if (cfg.export_input_pc) {
+        topic_info.name = cfg.pc_topic;
+        topic_info.type = "sensor_msgs/msg/PointCloud2";
+        topic_info.offered_qos_profiles = {};
+
+        writer.create_topic(topic_info);
+        std::cout << "[OK] " << cfg.pc_topic << " topic created succesfully\n";
+    }
+
+    if (cfg.use_detections) {
+        topic_info.name = cfg.filtered_topic;
+        topic_info.type = "sensor_msgs/msg/PointCloud2";
+        topic_info.offered_qos_profiles = {};
+
+        writer.create_topic(topic_info);
+        std::cout << "[OK] " << cfg.filtered_topic << " topic created succesfully\n";
+    }
+
+    if (cfg.use_images) {
+        topic_info.name = cfg.img_topic;
+        topic_info.type = "sensor_msgs/msg/Image";
+        topic_info.offered_qos_profiles = {};
+
+        writer.create_topic(topic_info);
+        std::cout << "[OK] " << cfg.img_topic << " topic created succesfully\n";
+    }
+}
+
+void
+generate_rosbag(const Config& cfg,  const std::vector<int64_t>& timestamps_ns)
+{
+    auto point_cloud_files = getPointCloudFiles(cfg.pc_dir);
+
+    // Make sure timestamps and point cloud files have 1:1 correspondence
+    if (timestamps_ns.size() != point_cloud_files.size()) {
+        throw std::runtime_error(
+            "Number of point clouds (" +
+            std::to_string(point_cloud_files.size()) +
+            ") does not match number of timestamps (" +
+            std::to_string(timestamps_ns.size()) + ")");
+    }
+
+    // Configure output rosbag parameters
+    rosbag2_cpp::Writer writer;
+
+    rosbag2_storage::StorageOptions out_storage;
+    out_storage.uri = cfg.rosbag_out;
+    out_storage.storage_id = "mcap";
+
+    rosbag2_cpp::ConverterOptions out_converter;
+    out_converter.input_serialization_format  = "cdr";
+    out_converter.output_serialization_format = "cdr";
+
+    writer.open(out_storage, out_converter);
+
+    // Create the topics of the new rosbag
+    createTopics(writer, cfg);
+
+
+    // Write data in the rosbag
 }
 
 int main(int argc, char* argv[])
@@ -267,9 +364,11 @@ int main(int argc, char* argv[])
         print_summary(cfg);
         std::cout << "[OK] configuration succesful\n";
 
-        std::cout << "[INFO] loading timesatmps...\n";
+        std::cout << "[INFO] loading timesatmps..." << std::flush;
         std::vector<int64_t> timestamps = loadTimestamps(cfg.ts_file);
-        std::cout << "[OK] timestamps loaded succesfully\n";
+        std::cout << "\r[OK] timestamps loaded succesfully\n";
+
+        generate_rosbag(cfg, timestamps);
 
         exit(EXIT_SUCCESS);
     }
