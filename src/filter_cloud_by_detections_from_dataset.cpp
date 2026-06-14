@@ -51,56 +51,49 @@ struct Config
     fs::path det_dir;
     double score{};
     std::string filtered_topic;
-    std::vector<std::string> classes;
+    std::unordered_set<std::string> classes;
 };
 
 /*
 FUNCIÓN LEER DETECCIONES DE FICHERO TEMPORAL A FALTA DE MODIFICAR LA DE LA LIBRERÍA
 */
 std::vector<Detection>
-load_detections_from_file(
-        const std::string& det_path,
-        const float min_score,
-        const std::unordered_set<std::string>& allowed_set)
+loadDetections(
+    const std::string det_file,
+    double score_threshold,
+    const std::unordered_set<std::string>& allowed_classes)
 {
+    std::ifstream file(det_file);
+
+    if (!file.is_open()) {
+        throw std::runtime_error("Cannot open detections file: " + det_file);
+    }
+
     std::vector<Detection> detections;
 
-    // Argument validation
-    if (!std::filesystem::exists(det_path)) {
-        std::cerr << "[WARN] Detections file: " << det_path << " does not exists\n";
-        return detections;
-    }
-
-    std::ifstream file(det_path);
-    if (!file.is_open()) {
-        std::cerr << "[ERROR] Detections file: " << det_path << "can't be oppened\n";
-        return detections;
-    }
-
     std::string line;
-    std::stringstream ss;
 
-    while (std::getline(file, line)) {
-        if (line.empty()) continue;
+    while (std::getline(file, line))
+    {
+        if (line.empty()) {continue;}
 
-        ss.str(line);
-        ss.clear();
+        std::stringstream ss(line);
 
         Detection det;
 
-        if (ss >> det.category >> det.x >> det.y >> det.z
-            >> det.w >> det.l >> det.h >> det.ry >> det.score) {
+        if (!(ss >> det.category >> det.x >> det.y >> det.z >> det.w
+            >> det.l >> det.h >> det.ry >> det.score)) {continue;}
 
-            if (det.score >= min_score && allowed_set.find(det.category) != allowed_set.end()) {
-                detections.push_back(det);
-            }
+        if (det.score < score_threshold) {continue;}
 
-        }
+        if (!allowed_classes.empty() &&
+            allowed_classes.find(det.category) == allowed_classes.end()) {continue;}
+
+        detections.push_back(std::move(det));
     }
 
     return detections;
 }
-
 
 /*
 FUNCIÓN FILTRADO TEMPORAL A FALTA DE MODIFICAR LA DE LA LIBRERÍA
@@ -451,7 +444,9 @@ parse_arguments(int argc, char* argv[])
 
         cfg.filtered_topic = result["filtered_topic"].as<std::string>();
 
-        cfg.classes = result["classes"].as<std::vector<std::string>>();
+        auto class_vec = result["classes"].as<std::vector<std::string>>();
+
+        cfg.classes = std::unordered_set<std::string>(class_vec.begin(), class_vec.end()); 
     }
 
     return cfg;
@@ -648,6 +643,7 @@ writeRosbag(
             auto det_it = detection_index.find(frame_id);
 
             if (det_it != detection_index.end()) {
+                auto detections = loadDetections(det_it->second.string(), cfg.score, cfg.classes);
                 // Filtrar la nube primero
                 writeCloud(input_cloud, cfg.filtered_topic, writer, timestamps_ns[i]);
 
