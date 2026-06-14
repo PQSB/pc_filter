@@ -1,7 +1,4 @@
 cmake_minimum_required(VERSION 3.8)
-
-
-
 project(pc_filter)
 
 # --- NUEVO: Forzar C++17 para poder usar <filesystem> ---
@@ -26,7 +23,20 @@ find_package(rosbag2_storage REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(PCL REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(visualization_msgs REQUIRED)
+
+find_package(OpenCV REQUIRED)
+find_package(cv_bridge REQUIRED)
 # ----------------------------------------------------------------
+
+# Para gestión de argumentos
+include(FetchContent)
+fetchcontent_declare(cxxopts
+  GIT_REPOSITORY  https://github.com/jarro2783/cxxopts
+  GIT_TAG         v3.2.1
+)
+FetchContent_MakeAvailable(cxxopts)
+
 
 if(POLICY CMP0074)
   cmake_policy(SET CMP0074 NEW)
@@ -44,6 +54,8 @@ set(dependencies
   rosbag2_cpp
   rosbag2_storage
   pcl_conversions
+  visualization_msgs
+  cv_bridge
 )
 # --------------------------------------------------------------------------
 
@@ -58,7 +70,7 @@ add_library(${PROJECT_NAME} SHARED
 )
 ament_target_dependencies(${PROJECT_NAME} ${dependencies})
 # --- NUEVO: Enlazar PCL y Eigen a la librería principal ---
-target_link_libraries(${PROJECT_NAME} ${PCL_LIBRARIES} Eigen3::Eigen)
+target_link_libraries(${PROJECT_NAME} ${PCL_LIBRARIES} Eigen3::Eigen cxxopts)
 
 # Add my library
 add_library(pc_filter_lib SHARED
@@ -73,12 +85,18 @@ ament_target_dependencies(rosbag_pc_filter ${dependencies})
 # --- NUEVO: Enlazar PCL y Eigen al nodo ejecutable ---
 target_link_libraries(rosbag_pc_filter ${PROJECT_NAME} pc_filter_lib ${PCL_LIBRARIES} Eigen3::Eigen)
 
+add_executable(dataset_pc_filter src/filter_cloud_by_detections_from_dataset.cpp)
+ament_target_dependencies(dataset_pc_filter ${dependencies})
+# --- NUEVO: Enlazar PCL y Eigen al nodo ejecutable ---
+target_link_libraries(dataset_pc_filter ${PROJECT_NAME} pc_filter_lib ${PCL_LIBRARIES} Eigen3::Eigen)
+
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
 
 install(TARGETS
   ${PROJECT_NAME}
   rosbag_pc_filter
+  dataset_pc_filter
   pc_filter_lib
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
