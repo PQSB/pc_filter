@@ -28,6 +28,9 @@
 #include <pcl/filters/crop_box.h>
 #include <pcl/filters/extract_indices.h>
 
+#include <visualization_msgs/msg/marker_array.hpp>
+#include <tf2/LinearMath/Quaternion.h>
+
 namespace fs = std::filesystem;
 
 struct Config
@@ -53,6 +56,42 @@ struct Config
     std::string filtered_topic;
     std::unordered_set<std::string> classes;
 };
+
+visualization_msgs::msg::Marker
+makeBoxMarker(const Detection& det, int64_t ts, int id) {
+    visualization_msgs::msg::Marker m;
+
+    m.header.frame_id = "base_lidar";
+    m.header.stamp = rclcpp::Time(ts);
+
+    m.ns = "crop_boxes";
+    m.id = id;
+    m.type = visualization_msgs::msg::Marker::CUBE;
+    m.action = visualization_msgs::msg::Marker::ADD;
+
+    m.pose.position.x = det.x;
+    m.pose.position.y = det.y;
+    m.pose.position.z = det.z;
+
+    tf2::Quaternion q;
+    q.setRPY(0.0, 0.0, det.ry);
+    m.pose.orientation.x = q.x();
+    m.pose.orientation.y = q.y();
+    m.pose.orientation.z = q.z();
+    m.pose.orientation.w = q.w();
+
+    m.scale.x = det.l;
+    m.scale.y = det.w;
+    m.scale.z = det.h;
+
+    m.color.r = 1.0f; m.color.g = 0.0f; m.color.b = 0.0f; m.color.a = 0.5f;
+    
+    // CAMBIO CLAVE: Controlado por DELETEALL, sin temporizadores reales
+    m.lifetime = rclcpp::Duration::from_seconds(0); 
+    
+    return m;
+}
+
 
 /*
 FUNCIÓN LEER DETECCIONES DE FICHERO TEMPORAL A FALTA DE MODIFICAR LA DE LA LIBRERÍA
@@ -98,6 +137,87 @@ loadDetections(
 /*
 FUNCIÓN FILTRADO TEMPORAL A FALTA DE MODIFICAR LA DE LA LIBRERÍA
 */
+pcl::PointCloud<pcl::PointXYZI>::Ptr
+filterPointCloud(
+    const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud,
+    const std::vector<Detection>& detections)
+{
+    auto filtered_cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
+
+    if (!cloud)
+    {
+        return filtered_cloud;
+    }
+
+    if (cloud->empty())
+    {
+        return filtered_cloud;
+    }
+
+    if (detections.empty())
+    {
+        return filtered_cloud;
+    }
+
+    pcl::IndicesPtr indices_to_keep(new std::vector<int>);
+
+    pcl::CropBox<pcl::PointXYZI> crop;
+    crop.setInputCloud(cloud);
+
+    for (const auto& det : detections)
+    {
+        if (det.l <= 0.0f || det.w <= 0.0f || det.h <= 0.0f){continue;}
+
+        Eigen::Vector4f min_pt(
+            -det.l / 2.0f, -det.w / 2.0f, -det.h / 2.0f, 1.0f);
+
+        Eigen::Vector4f max_pt(
+            det.l / 2.0f, det.w / 2.0f, det.h / 2.0f,1.0f);
+
+        Eigen::Vector3f translation(det.x, det.y, det.z);
+        Eigen::Vector3f rotation(0.0f, 0.0f, det.ry);
+
+        crop.setMin(min_pt);
+        crop.setMax(max_pt);
+
+        crop.setTranslation(translation);
+        crop.setRotation(rotation);
+
+        std::vector<int> inside_indices;
+
+        crop.filter(inside_indices);
+
+        indices_to_keep->insert(
+            indices_to_keep->end(), inside_indices.begin(), inside_indices.end());
+    }
+
+    if (indices_to_keep->empty())
+    {
+        return filtered_cloud;
+    }
+
+    std::sort(indices_to_keep->begin(), indices_to_keep->end());
+
+    indices_to_keep->erase(
+        std::unique(
+            indices_to_keep->begin(),
+            indices_to_keep->end()),
+        indices_to_keep->end());
+
+    pcl::ExtractIndices<pcl::PointXYZI> extract;
+
+    extract.setInputCloud(cloud);
+    extract.setIndices(indices_to_keep);
+
+    // Conservar únicamente los puntos
+    // que están dentro de las detecciones
+    extract.setNegative(true);
+
+    extract.filter(*filtered_cloud);
+
+    return filtered_cloud;
+}
+
 int
 filter_detections_from_cloud(
   const std::vector<Detection>& dets,
@@ -272,6 +392,9 @@ print_summary(const Config& cfg)
     std::cout << "  dir   : " << cfg.pc_dir << "\n";
     std::cout << "  topic : " << cfg.pc_topic << "\n";
     std::cout << "  timestamps file : " << cfg.ts_file << "\n\n";
+
+    std::cout << "[OUTPUT]\n";
+    std::cout << "  output : " << cfg.rosbag_out << "\n\n";
 
     if (cfg.use_images)
     {
@@ -498,6 +621,11 @@ createTopics(rosbag2_cpp::Writer& writer, const Config& cfg)
 
         writer.create_topic(topic_info);
         // std::cout << "[OK] " << cfg.filtered_topic << " topic created succesfully\n";
+
+        topic_info.name = "/det_boxes";
+        topic_info.type = "visualization_msgs/msg/MarkerArray";
+        topic_info.offered_qos_profiles = {};
+
     }
 
     if (cfg.use_images) {
@@ -644,8 +772,32 @@ writeRosbag(
 
             if (det_it != detection_index.end()) {
                 auto detections = loadDetections(det_it->second.string(), cfg.score, cfg.classes);
+                auto filtered_cloud = filterPointCloud(input_cloud, detections);
                 // Filtrar la nube primero
-                writeCloud(input_cloud, cfg.filtered_topic, writer, timestamps_ns[i]);
+                writeCloud(filtered_cloud, cfg.filtered_topic, writer, timestamps_ns[i]);
+
+                visualization_msgs::msg::MarkerArray marker_array;
+
+                visualization_msgs::msg::Marker clean_marker;
+                clean_marker.header.frame_id = "base_lidar";
+                clean_marker.header.stamp = rclcpp::Time(timestamps_ns[i]);
+                clean_marker.ns = "crop_boxes";
+                clean_marker.action = visualization_msgs::msg::Marker::DELETEALL;
+                marker_array.markers.push_back(clean_marker);
+
+
+                int id_contador = 0;
+                for (const auto& det : detections) {
+                    visualization_msgs::msg::Marker box = makeBoxMarker(det, timestamps_ns[i], id_contador++);
+                    marker_array.markers.push_back(box);
+                }
+
+                writer.write<visualization_msgs::msg::MarkerArray>(
+                    marker_array, 
+                    "/det_boxes", 
+                    rclcpp::Time(timestamps_ns[i])
+                );
+
 
             } else {
                 throw std::runtime_error("Missing detections for frame: " + frame_id);
@@ -699,12 +851,16 @@ int main(int argc, char* argv[])
 
         validate(cfg);
         print_summary(cfg);
-        std::cout << "Press [ENTER] to continue, or [ANY KEY + ENTER] to cancel: ";
+        std::cout << "Type [y|Y] to continue, or [ANY KEY] to cancel: ";
 
         std::string input;
         std::getline(std::cin, input);
 
-        if (!input.empty()) {
+        // if (!input.empty()) {
+        //     std::cout << "\n[ABORTED] EXECUTION ABORTED\n";
+        //     exit(EXIT_FAILURE);
+        // }
+        if (input != "y" && input != "Y") {
             std::cout << "\n[ABORTED] EXECUTION ABORTED\n";
             exit(EXIT_FAILURE);
         }
