@@ -53,6 +53,7 @@ struct Config
     bool use_detections = false;
     fs::path det_dir;
     double score{};
+    double max_dist = -1.0;
     std::string filtered_topic;
     std::unordered_set<std::string> classes;
 };
@@ -100,6 +101,7 @@ std::vector<Detection>
 loadDetections(
     const std::string det_file,
     double score_threshold,
+    double max_dist,
     const std::unordered_set<std::string>& allowed_classes)
 {
     std::ifstream file(det_file);
@@ -124,6 +126,9 @@ loadDetections(
             >> det.l >> det.h >> det.ry >> det.score)) {continue;}
 
         if (det.score < score_threshold) {continue;}
+
+        // Since detections are in LIDAR coordinates
+        if (det.x > max_dist) {continue;}
 
         if (!allowed_classes.empty() &&
             allowed_classes.find(det.category) == allowed_classes.end()) {continue;}
@@ -414,6 +419,7 @@ print_summary(const Config& cfg)
         std::cout << "  dir            : " << cfg.det_dir << "\n";
         std::cout << "  score          : " << cfg.score << "\n";
         std::cout << "  filtered_topic : " << cfg.filtered_topic << "\n";
+        std::cout << "  max_dist       : " << cfg.max_dist << "\n";
         std::cout << "  classes        : ";
 
         for (const auto& c : cfg.classes)
@@ -519,6 +525,7 @@ parse_arguments(int argc, char* argv[])
         ("d,det_dir", "Detections folder path", cxxopts::value<fs::path>())
         ("s,score", "Min score threshold", cxxopts::value<double>())
         ("filtered_topic", "Filtered point clouds topic name", cxxopts::value<std::string>())
+        ("max_dist", "Maximum detection distance", cxxopts::value<double>())
         ("c,classes", "Classes to filter (c1,c2,c3,...)", cxxopts::value<std::vector<std::string>>())
 
         ("h,help", "Show help");
@@ -569,7 +576,18 @@ parse_arguments(int argc, char* argv[])
 
         auto class_vec = result["classes"].as<std::vector<std::string>>();
 
-        cfg.classes = std::unordered_set<std::string>(class_vec.begin(), class_vec.end()); 
+        cfg.classes = std::unordered_set<std::string>(class_vec.begin(), class_vec.end());
+
+        // Validate max_dist argument here since it has a default value
+        if (result.count("max_dist")) {
+            double input_dist = result["max_dist"].as<double>();
+
+            if (input_dist >= 0.0) {
+                cfg.max_dist = input_dist;
+            } else {
+                throw std::invalid_argument("max_dist is invalid [max_dist >= 0.0]");
+            }
+        }
     }
 
     return cfg;
@@ -771,7 +789,7 @@ writeRosbag(
             auto det_it = detection_index.find(frame_id);
 
             if (det_it != detection_index.end()) {
-                auto detections = loadDetections(det_it->second.string(), cfg.score, cfg.classes);
+                auto detections = loadDetections(det_it->second.string(), cfg.score, cfg.max_dist, cfg.classes);
                 auto filtered_cloud = filterPointCloud(input_cloud, detections);
                 // Filtrar la nube primero
                 writeCloud(filtered_cloud, cfg.filtered_topic, writer, timestamps_ns[i]);
