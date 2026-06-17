@@ -31,6 +31,8 @@
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <tf2/LinearMath/Quaternion.h>
 
+constexpr double MAX_DIST_DEFAULT = -1.0;
+
 namespace fs = std::filesystem;
 
 struct Config
@@ -53,7 +55,7 @@ struct Config
     bool use_detections = false;
     fs::path det_dir;
     double score{};
-    double max_dist = -1.0;
+    double max_dist = MAX_DIST_DEFAULT;
     std::string filtered_topic;
     std::unordered_set<std::string> classes;
 };
@@ -114,6 +116,8 @@ loadDetections(
 
     std::string line;
 
+    double max_dist_sq = max_dist * max_dist;
+
     while (std::getline(file, line))
     {
         if (line.empty()) {continue;}
@@ -127,8 +131,12 @@ loadDetections(
 
         if (det.score < score_threshold) {continue;}
 
-        // Since detections are in LIDAR coordinates
-        if (det.x > max_dist) {continue;}
+        // Check if the filter is active
+        if (max_dist != MAX_DIST_DEFAULT){
+            // To avoid using sqrt
+            double dist_sq = (det.x * det.x) + (det.y * det.y) + (det.z * det.z);
+            if (dist_sq > max_dist_sq) {continue;}
+        }
 
         if (!allowed_classes.empty() &&
             allowed_classes.find(det.category) == allowed_classes.end()) {continue;}
@@ -871,14 +879,14 @@ int main(int argc, char* argv[])
         print_summary(cfg);
         std::cout << "Type [y|Y] to continue, or [ANY KEY] to cancel: ";
 
-        std::string input;
-        std::getline(std::cin, input);
+        char input;
+        std::cin.get(input);
 
         // if (!input.empty()) {
         //     std::cout << "\n[ABORTED] EXECUTION ABORTED\n";
         //     exit(EXIT_FAILURE);
         // }
-        if (input != "y" && input != "Y") {
+        if (input != 'y' && input != 'Y') {
             std::cout << "\n[ABORTED] EXECUTION ABORTED\n";
             exit(EXIT_FAILURE);
         }
