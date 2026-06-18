@@ -35,6 +35,15 @@ constexpr double MAX_DIST_DEFAULT = -1.0;
 
 namespace fs = std::filesystem;
 
+struct FovCalibration
+{
+    Eigen::Matrix<float, 3, 4> P2;
+    Eigen::Matrix4f Tr_velo_to_cam;
+
+    int image_width{};
+    int image_height{};
+};
+
 struct Config
 {
     // Neccesary
@@ -46,7 +55,12 @@ struct Config
     std::string pc_topic;
     bool export_input_pc = false;
 
-    // Imágenes
+    // fov filter
+    fs::path fov_file;
+    bool use_fov_filter = false;
+    FovCalibration fov_params;
+
+    // Images
     bool use_images = false;
     fs::path img_dir;
     std::string img_topic;
@@ -59,6 +73,51 @@ struct Config
     std::string filtered_topic;
     std::unordered_set<std::string> classes;
 };
+
+FovCalibration
+getFovFromFile(const fs::path& fov_file_path)
+{
+    std::ifstream fov_file(fov_file_path);
+    if (!fov_file.is_open()) {
+        throw std::runtime_error(
+            "[ERROR] Can't open fov filter calib file: " + fov_file_path.string());
+    }
+
+    FovCalibration calib;
+
+    // Read images width and height
+    if (!(fov_file >> calib.image_width >> calib.image_height)) {
+        throw std::runtime_error(
+            "[ERROR] File doesn't contains image dimensions: " + fov_file_path.string());
+    }
+
+    // Read P2 (3x4)
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            fov_file >> calib.P2(r, c);
+        }
+    }
+
+    // Read Tr (3x4 - Formato KITTI omitiendo la última fila)
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            fov_file >> calib.Tr_velo_to_cam(r, c);
+        }
+    }
+
+    if (!fov_file) {
+        throw std::runtime_error(
+            "[ERROR] The file was terminated prematurely: " + fov_file_path.string());
+    }
+
+    // Fill Tr last row since it's 4x4
+    calib.Tr_velo_to_cam(3, 0) = 0.0f;
+    calib.Tr_velo_to_cam(3, 1) = 0.0f;
+    calib.Tr_velo_to_cam(3, 2) = 0.0f;
+    calib.Tr_velo_to_cam(3, 3) = 1.0f;
+
+    return calib;
+}
 
 visualization_msgs::msg::Marker
 makeBoxMarker(const Detection& det, int64_t ts, int id) {
@@ -157,19 +216,14 @@ filterPointCloud(
 {
     auto filtered_cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
 
-    if (!cloud)
-    {
-        return filtered_cloud;
-    }
-
-    if (cloud->empty())
+    if (!cloud || cloud->empty())
     {
         return filtered_cloud;
     }
 
     if (detections.empty())
     {
-        return filtered_cloud;
+        return cloud;
     }
 
     pcl::IndicesPtr indices_to_keep(new std::vector<int>);
@@ -204,9 +258,10 @@ filterPointCloud(
             indices_to_keep->end(), inside_indices.begin(), inside_indices.end());
     }
 
+    // If there are no points that fall within the detections, return the entire cloud
     if (indices_to_keep->empty())
     {
-        return filtered_cloud;
+        return cloud;
     }
 
     std::sort(indices_to_keep->begin(), indices_to_keep->end());
@@ -335,19 +390,20 @@ loadTimestamps(const fs::path& ts_file)
 }
 
 pcl::PointCloud<pcl::PointXYZI>::Ptr
-loadPointCloudXYZI(const std::string& filepath)
+loadPointCloudXYZI(
+    const fs::path& filepath, const bool use_fov, const FovCalibration& calib)
 {
     auto cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
 
     // Check if the file exists
-    if (!std::filesystem::exists(filepath)) {
+    if (!fs::exists(filepath)) {
         std::cerr << "[WARN] File does not exist: " << filepath << "\n";
         return cloud;
     }
 
     // Get the total size of the file
-    const size_t file_size = std::filesystem::file_size(filepath);
-    const size_t point_size = 4 * sizeof(float); // XYZ = 12 bytes
+    const size_t file_size = fs::file_size(filepath);
+    const size_t point_size = 4 * sizeof(float); // XYZI = 16 bytes
 
     if (file_size == 0) {
         std::cerr << "[ERROR] Empty file: " << filepath << "\n";
@@ -378,16 +434,61 @@ loadPointCloudXYZI(const std::string& filepath)
         return cloud;
     }
 
-    cloud->points.resize(num_points);
+    cloud->points.reserve(num_points);
 
+    // for (size_t i = 0; i < num_points; ++i) {
+    //     cloud->points[i].x = raw[i * 4 + 0];
+    //     cloud->points[i].y = raw[i * 4 + 1];
+    //     cloud->points[i].z = raw[i * 4 + 2];
+    //     cloud->points[i].intensity = raw[i * 4 + 3];
+    // }
+
+    Eigen::Vector4f X_velo;
+    Eigen::Vector4f X_cam;
+    Eigen::Vector3f uvw;
+
+    pcl::PointXYZI pt;
+
+    float x, y, z, intensity, u, v;
     for (size_t i = 0; i < num_points; ++i) {
-        cloud->points[i].x = raw[i * 4 + 0];
-        cloud->points[i].y = raw[i * 4 + 1];
-        cloud->points[i].z = raw[i * 4 + 2];
-        cloud->points[i].intensity = raw[i * 4 + 3];
+        x = raw[i * 4 + 0];
+        y = raw[i * 4 + 1];
+        z = raw[i * 4 + 2];
+        intensity = raw[i * 4 + 3];
+
+        if (use_fov) {
+            X_velo << x, y, z, 1.0f;
+
+            X_cam = calib.Tr_velo_to_cam * X_velo;
+
+            // If point is behind the camera, ignore it
+            if (X_cam.z() <= 0.0f) {
+                continue;
+            }   
+        
+            // Proyection
+            uvw = calib.P2 * X_cam;
+
+            u = uvw.x() / uvw.z();
+            v = uvw.y() / uvw.z();
+
+            if (u < 0 || u >= calib.image_width ||
+                v < 0 || v >= calib.image_height)
+            {
+                continue;
+            }
+
+        }
+
+        pt.x = x;
+        pt.y = y;
+        pt.z = z;
+        pt.intensity = intensity;
+    
+        cloud->points.push_back(pt);
     }
 
-    cloud->width  = num_points;
+    cloud->width  = cloud->points.size();
     cloud->height = 1;
     cloud->is_dense = false;
 
@@ -408,6 +509,17 @@ print_summary(const Config& cfg)
 
     std::cout << "[OUTPUT]\n";
     std::cout << "  output : " << cfg.rosbag_out << "\n\n";
+
+    if (cfg.use_fov_filter)
+    {
+        std::cout << "[FOV FILTER] ENABLED\n";
+        std::cout << "  fov calib file : " << cfg.fov_file<< "\n\n";
+    }
+    else
+    {
+        std::cout << "[FOV FILTER] DISABLED\n";
+        std::cout << "  Reason: fov_filter not provided -> module ignored\n\n";
+    }
 
     if (cfg.use_images)
     {
@@ -521,6 +633,8 @@ parse_arguments(int argc, char* argv[])
         ("ts_file", "Timestamps file needed for rosbag messages headers (REQUIRED)", cxxopts::value<fs::path>(cfg.ts_file))
         ("pc_topic", "Input point clouds topic", cxxopts::value<std::string>(cfg.pc_topic))
 
+        ("fov_filter", "Preprocessed file generated with prepare_fov_filter_calib_file.py", cxxopts::value<fs::path>())
+
         // Output
         ("o,rosbag_out", "Output rosbag path (REQUIRED)", cxxopts::value<fs::path>(cfg.rosbag_out))
 
@@ -550,6 +664,19 @@ parse_arguments(int argc, char* argv[])
     {
         cfg.export_input_pc = true;
         cfg.pc_topic = result["pc_topic"].as<std::string>();
+    }
+
+    if (result.count("fov_filter"))
+    {
+        cfg.use_fov_filter = true;
+        cfg.fov_file = result["fov_filter"].as<fs::path>();
+
+        // Add check of fov_file before filling FovCalibration
+        if (!fs::exists(cfg.fov_file) || !fs::is_regular_file(cfg.fov_file))
+        throw std::invalid_argument("fov_file invalid");
+
+        // Fill the FovCalibration struct
+        cfg.fov_params = getFovFromFile(cfg.fov_file);
     }
 
     // Imágenes → activar módulo solo si existe dir
@@ -688,7 +815,7 @@ buildFileIndex(const fs::path& directory)
 
 void
 writeImage(
-    const std::string& img_path,
+    const fs::path& img_path,
     const std::string& topic,
     rosbag2_cpp::Writer& writer,
     int64_t timestamp_ns)
@@ -696,7 +823,7 @@ writeImage(
     cv::Mat image = cv::imread(img_path, cv::IMREAD_COLOR);
 
     if (image.empty()) {
-        throw std::runtime_error("Cannot load image: " + img_path);
+        throw std::runtime_error("Cannot load image: " + img_path.string());
     }
 
     auto image_msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", image).toImageMsg();
@@ -777,7 +904,8 @@ writeRosbag(
             }
         }
 
-        auto input_cloud = loadPointCloudXYZI(files[i]);
+        auto input_cloud = loadPointCloudXYZI(
+            files[i], cfg.use_fov_filter, cfg.fov_params);
 
         if (!input_cloud || input_cloud->empty())
         {
