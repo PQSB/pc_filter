@@ -33,6 +33,30 @@
 
 constexpr double MAX_DIST_DEFAULT = -1.0;
 
+const std::unordered_map<std::string, int> semantic_kitti_classes = {
+    // Clases Especiales y Vehículos (Estáticos)
+    {"unlabeled", 0}, {"outlier", 1}, {"car", 10}, {"bicycle", 11}, {"bus", 13}, {"motorcycle", 15},
+    {"on-rails", 16}, {"truck", 17}, {"other-vehicle", 20},
+
+    // Peatones y Ciclistas (Estáticos)
+    {"person", 30},{"bicyclist", 31},{"motorcyclist", 32},
+
+    // Terreno y Carretera
+    {"road", 40}, {"parking", 44}, {"sidewalk", 48}, {"other-ground", 49},
+
+    // Estructuras y Vegetación
+    {"building", 50}, {"fence", 51}, {"other-structure", 52}, {"lane-marking", 60},
+    {"vegetation", 70}, {"trunk", 71}, {"terrain", 72},
+
+    // Objetos del Entorno
+    {"pole", 80}, {"traffic-sign", 81}, {"other-object", 99},
+
+    // Clases Dinámicas (Objetos en Movimiento)
+    {"moving-car", 252}, {"moving-bicyclist", 253}, {"moving-person", 254},
+    {"moving-motorcyclist", 255}, {"moving-on-rails", 256}, {"moving-bus", 257},
+    {"moving-truck", 258}, {"moving-other-vehicle", 259}
+};
+
 namespace fs = std::filesystem;
 
 struct FovCalibration
@@ -79,6 +103,69 @@ struct Config
     std::string sk_topic;
     std::unordered_set<std::string> sk_classes;
 };
+
+pcl::PointCloud<pcl::PointXYZI>::Ptr
+semantic_kitti_filter(
+  const std::unordered_set<std::string>& classes2filter,
+  pcl::PointCloud<pcl::PointXYZI>::Ptr& input_cloud,
+  fs::path lbl_path,
+  std::vector<int64_t> original_indices)
+{
+    pcl::PointCloud<pcl::PointXYZI>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZI>());
+
+    // Open lbl file (.label)
+    std::ifstream label_file(lbl_path, std::ios::binary);
+    if (!label_file.is_open()) {
+        throw std::runtime_error("[ERROR] Cannot open semantic kitti lbl file: " + lbl_path.string());
+    }
+
+    std::unordered_set<uint16_t> numeric_ids_to_remove;
+
+    // Change classes to filter from string to the numeric id
+    for (const std::string& name : classes2filter) {
+        auto it = semantic_kitti_classes.find(name);
+        if (it != semantic_kitti_classes.end()) {
+            numeric_ids_to_remove.insert(it->second);
+        } else {
+            throw std::runtime_error("[ERROR] Category " + name + "doesn't exists in semantic kitti");
+        }
+    }
+
+    // Vector optimizado (uint16_t) para almacenar solo la clase semántica limpia
+    std::vector<uint16_t> all_labels;
+    uint32_t temp_label; // Mantiene 32 bits para leer correctamente bloques de 4 bytes del archivo
+
+    // Leer y limpiar inmediatamente en cada iteración
+    while (label_file.read(reinterpret_cast<char*>(&temp_label), sizeof(uint32_t))) {
+        // Extrae los 16 bits inferiores (ID de clase) y descarta los superiores (instancia)
+        all_labels.push_back(temp_label & 0xFFFF);
+    }
+
+    // Reservar memoria estimada en la nueva nube para mejorar el rendimiento
+    filtered_cloud->reserve(input_cloud->size());
+
+    // Filtrar los puntos recorriendo la nube actual
+    for (size_t i = 0; i < input_cloud->size(); ++i) {
+        // Recuperar la posición que tenía este punto en la nube original antes del FOV
+        int orig_idx = original_indices[i];
+
+        // Control de seguridad: evitar desbordamientos de memoria si el índice es inválido
+        if (orig_idx < 0 || orig_idx >= static_cast<int>(all_labels.size())) {
+            std::cerr << "Error: Índice original " << orig_idx << " fuera de rango del archivo de etiquetas." << std::endl;
+            continue; 
+        }
+
+        // La clase ya viene limpia desde el vector all_labels (gracias al filtro en la lectura)
+        uint16_t semantic_class = all_labels[orig_idx];
+
+        // Si la clase NO está en el conjunto de eliminación, el punto es válido y lo guardamos
+        if (numeric_ids_to_remove.find(semantic_class) == numeric_ids_to_remove.end()) {
+            filtered_cloud->push_back(input_cloud->points[i]);
+        }
+    }
+
+    return filtered_cloud;
+}
 
 FovCalibration
 getFovFromFile(const fs::path& fov_file_path)
@@ -166,7 +253,7 @@ FUNCIÓN LEER DETECCIONES DE FICHERO TEMPORAL A FALTA DE MODIFICAR LA DE LA LIBR
 */
 std::vector<Detection>
 loadDetections(
-    const std::string det_file,
+    const fs::path det_file,
     double m_score_threshold,
     double m_max_dist,
     const std::unordered_set<std::string>& allowed_classes)
@@ -174,7 +261,7 @@ loadDetections(
     std::ifstream file(det_file);
 
     if (!file.is_open()) {
-        throw std::runtime_error("Cannot open detections file: " + det_file);
+        throw std::runtime_error("Cannot open detections file: " + det_file.string());
     }
 
     std::vector<Detection> detections;
@@ -292,73 +379,6 @@ filterPointCloud(
     return filtered_cloud;
 }
 
-int
-filter_detections_from_cloud(
-  const std::vector<Detection>& dets,
-  pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud)
-{
-    // 1. Filtros de seguridad para evitar caídas del programa
-    if (dets.empty() || !cloud || cloud->empty()) {
-        return -1;
-    }
-
-    // 2. Vector para acumular los índices de puntos a borrar de TODAS las cajas
-    pcl::IndicesPtr indices_to_remove(new std::vector<int>);
-
-    // 3. Configurar el objeto CropBox apuntando a nuestra nube de entrada
-    pcl::CropBox<pcl::PointXYZI> crop;
-    crop.setInputCloud(cloud);
-
-    for (const auto& det : dets)
-    {
-
-        Eigen::Vector4f min_pt, max_pt;
-        Eigen::Vector3f rotation;
-        Eigen::Vector3f translation(det.x, det.y, det.z);
-
-        // X=Largo, Y=Ancho, Z=Alto. Rotation in Z.
-        min_pt = Eigen::Vector4f(-det.l / 2.0f, -det.w / 2.0f, -det.h / 2.0f, 1.0f);
-        max_pt = Eigen::Vector4f( det.l / 2.0f,  det.w / 2.0f,  det.h / 2.0f, 1.0f);
-   
-        rotation = Eigen::Vector3f(0.0f, 0.0f, det.ry);
-
-        crop.setMin(min_pt);
-        crop.setMax(max_pt);
-        crop.setTranslation(translation);
-        crop.setRotation(rotation);
-
-        std::vector<int> inside;
-        crop.filter(inside);
-
-        indices_to_remove->insert(indices_to_remove->end(), inside.begin(), inside.end());
-    }
-
-    // 7. Si ninguna caja contenía puntos, terminamos el proceso de inmediato
-    if (indices_to_remove->empty()) {
-        // std::cerr << "Nothing filtered in the detections provided\n";
-        //std::cout << "\n[Filtro] Terminado. No se encontraron puntos dentro de las cajas (0 filtrados)." << std::endl;
-        cloud->clear();
-        return 0;
-    }
-
-    std::sort(indices_to_remove->begin(), indices_to_remove->end());
-    indices_to_remove->erase(std::unique(indices_to_remove->begin(), indices_to_remove->end()), indices_to_remove->end());
-
-    // 9. Ejecutar ExtractIndices una sola vez para toda la nube
-    pcl::ExtractIndices<pcl::PointXYZI> extract;
-    extract.setInputCloud(cloud);
-    extract.setIndices(indices_to_remove);
-    extract.setNegative(false);  // true = borrar los puntos que están dentro de las cajas
-
-    // Filtrar hacia un contenedor temporal y reasignar a la nube original
-    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_filtered(new pcl::PointCloud<pcl::PointXYZI>);
-    extract.filter(*cloud_filtered);
-    //cloud->swap(*cloud_filtered);
-    *cloud = *cloud_filtered; 
-
-    return 0;
-}
-
 std::vector<int64_t>
 loadTimestamps(const fs::path& ts_file)
 {
@@ -395,16 +415,20 @@ loadTimestamps(const fs::path& ts_file)
     return timestamps_ns;
 }
 
-pcl::PointCloud<pcl::PointXYZI>::Ptr
+std::tuple<pcl::PointCloud<pcl::PointXYZI>::Ptr, std::vector<int64_t>>
 loadPointCloudXYZI(
     const fs::path& filepath, const bool use_fov, const FovCalibration& calib)
 {
     auto cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
+    
+    // Stores the index of the original position of each point within the binary file (.bin) before applying any filters.
+    std::vector<int64_t> correspondence;
 
     // Check if the file exists
     if (!fs::exists(filepath)) {
         std::cerr << "[WARN] File does not exist: " << filepath << "\n";
-        return cloud;
+        return {cloud, correspondence};
+        // throw std::runtime_error("[ERROR] File does not exist: " + filepath.string());
     }
 
     // Get the total size of the file
@@ -413,13 +437,16 @@ loadPointCloudXYZI(
 
     if (file_size == 0) {
         std::cerr << "[ERROR] Empty file: " << filepath << "\n";
-        return cloud;
+        return {cloud, correspondence};
+        // throw std::runtime_error("[ERROR] Empty file: " + filepath.string());
     }
 
     if (file_size % point_size != 0) {
         std::cerr << "[ERROR] Invalid .bin file size for XYZI format: "
                   << file_size << " bytes\n";
-        return cloud;
+        return {cloud, correspondence};
+        // throw std::runtime_error("[ERROR] Invalid .bin file size for XYZI format: " + 
+        //                          std::to_string(file_size) + " bytes en " + filepath.string());
     }
 
     // Calculate the number of points of the point cloud
@@ -431,17 +458,18 @@ loadPointCloudXYZI(
     std::ifstream file(filepath, std::ios::binary);
     if (!file.is_open()) {
         std::cerr << "[ERROR] Cannot open file: " << filepath << "\n";
-        return cloud;
+        // return [cloud, correspondence];
+        return {cloud, correspondence};
     }
 
     // comprobar si puedo usar fread
     if (!file.read(reinterpret_cast<char*>(raw.data()), file_size)) {
         std::cerr << "[ERROR] Could not read full file\n";
-        return cloud;
+        return {cloud, correspondence};;
     }
 
     cloud->points.reserve(num_points);
-
+    correspondence.reserve(num_points);
     // for (size_t i = 0; i < num_points; ++i) {
     //     cloud->points[i].x = raw[i * 4 + 0];
     //     cloud->points[i].y = raw[i * 4 + 1];
@@ -492,13 +520,14 @@ loadPointCloudXYZI(
         pt.intensity = intensity;
     
         cloud->points.push_back(pt);
+        correspondence.push_back(static_cast<int64_t>(i));
     }
 
     cloud->width  = cloud->points.size();
     cloud->height = 1;
     cloud->is_dense = false;
 
-    return cloud;
+    return {cloud, correspondence};
 }
 
 void
@@ -603,10 +632,9 @@ print_summary(const Config& cfg)
             std::cout
                 << "   - partial semantic kitti args were ignored\n";
         }
-        std::cout << "\n";
     }
 
-    std::cout << "=====================================\n\n";
+    std::cout << "\n=====================================\n\n";
 }
 
 void
@@ -781,7 +809,7 @@ parse_arguments(int argc, char* argv[])
         }
     }
 
-    if (result.count("m_det_dir"))
+    if (result.count("sk_lbl_dir"))
     {
        cfg.use_sk = true;
 
@@ -941,6 +969,7 @@ writeRosbag(
 
     std::unordered_map<std::string, fs::path> image_index;
     std::unordered_map<std::string, fs::path> detection_index;
+    std::unordered_map<std::string, fs::path> sk_index;
 
     if (cfg.use_images)
     {
@@ -950,6 +979,11 @@ writeRosbag(
     if (cfg.use_detections)
     {
         detection_index = buildFileIndex(cfg.m_det_dir);
+    }
+
+    if (cfg.use_sk)
+    {
+        sk_index = buildFileIndex(cfg.sk_lbl_dir);
     }
 
     std::string frame_id;
@@ -979,7 +1013,7 @@ writeRosbag(
             }
         }
 
-        auto input_cloud = loadPointCloudXYZI(
+        auto [input_cloud, corr] = loadPointCloudXYZI(
             files[i], cfg.use_fov_filter, cfg.fov_params);
 
         if (!input_cloud || input_cloud->empty())
@@ -994,6 +1028,18 @@ writeRosbag(
 
         if (cfg.export_input_pc) {
             writeCloud(input_cloud, cfg.pc_topic, writer, timestamps_ns[i]);
+        }
+
+        if (cfg.use_sk) {
+            auto sk_it = sk_index.find(frame_id);
+
+            if (sk_it != sk_index.end()) {
+                auto sk_filtered_cloud = semantic_kitti_filter(cfg.sk_classes, input_cloud, sk_it->second.string(), corr);
+                writeCloud(sk_filtered_cloud, cfg.sk_topic, writer, timestamps_ns[i]);
+
+            } else {
+                throw std::runtime_error("Missing semantic kitti lbl file for frame: " + frame_id);
+            }
         }
 
         if (cfg.use_detections) {
