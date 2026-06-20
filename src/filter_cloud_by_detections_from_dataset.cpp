@@ -65,13 +65,19 @@ struct Config
     fs::path img_dir;
     std::string img_topic;
 
-    // Detections
+    // 3D-MOOD detections
     bool use_detections = false;
-    fs::path det_dir;
-    double score{};
-    double max_dist = MAX_DIST_DEFAULT;
-    std::string filtered_topic;
-    std::unordered_set<std::string> classes;
+    fs::path m_det_dir;
+    double m_score{};
+    double m_max_dist = MAX_DIST_DEFAULT;
+    std::string m_topic;
+    std::unordered_set<std::string> m_classes;
+
+    // Semantic kitti
+    bool use_sk = false;
+    fs::path sk_lbl_dir;
+    std::string sk_topic;
+    std::unordered_set<std::string> sk_classes;
 };
 
 FovCalibration
@@ -161,8 +167,8 @@ FUNCIÓN LEER DETECCIONES DE FICHERO TEMPORAL A FALTA DE MODIFICAR LA DE LA LIBR
 std::vector<Detection>
 loadDetections(
     const std::string det_file,
-    double score_threshold,
-    double max_dist,
+    double m_score_threshold,
+    double m_max_dist,
     const std::unordered_set<std::string>& allowed_classes)
 {
     std::ifstream file(det_file);
@@ -175,7 +181,7 @@ loadDetections(
 
     std::string line;
 
-    double max_dist_sq = max_dist * max_dist;
+    double m_max_dist_sq = m_max_dist * m_max_dist;
 
     while (std::getline(file, line))
     {
@@ -188,13 +194,13 @@ loadDetections(
         if (!(ss >> det.category >> det.x >> det.y >> det.z >> det.w
             >> det.l >> det.h >> det.ry >> det.score)) {continue;}
 
-        if (det.score < score_threshold) {continue;}
+        if (det.score < m_score_threshold) {continue;}
 
         // Check if the filter is active
-        if (max_dist != MAX_DIST_DEFAULT){
+        if (m_max_dist != MAX_DIST_DEFAULT){
             // To avoid using sqrt
             double dist_sq = (det.x * det.x) + (det.y * det.y) + (det.z * det.z);
-            if (dist_sq > max_dist_sq) {continue;}
+            if (dist_sq > m_max_dist_sq) {continue;}
         }
 
         if (!allowed_classes.empty() &&
@@ -279,7 +285,7 @@ filterPointCloud(
 
     // Conservar únicamente los puntos
     // que están dentro de las detecciones
-    extract.setNegative(true);
+    extract.setNegative(false);
 
     extract.filter(*filtered_cloud);
 
@@ -535,14 +541,14 @@ print_summary(const Config& cfg)
 
     if (cfg.use_detections)
     {
-        std::cout << "[DETECTIONS] ENABLED\n";
-        std::cout << "  dir            : " << cfg.det_dir << "\n";
-        std::cout << "  score          : " << cfg.score << "\n";
-        std::cout << "  filtered_topic : " << cfg.filtered_topic << "\n";
-        std::cout << "  max_dist       : " << cfg.max_dist << "\n";
+        std::cout << "[3D-MOOD DETECTIONS] ENABLED\n";
+        std::cout << "  dir            : " << cfg.m_det_dir << "\n";
+        std::cout << "  score          : " << cfg.m_score << "\n";
+        std::cout << "  topic : " << cfg.m_topic << "\n";
+        std::cout << "  max_dist       : " << cfg.m_max_dist << "\n";
         std::cout << "  classes        : ";
 
-        for (const auto& c : cfg.classes)
+        for (const auto& c : cfg.m_classes)
             std::cout << c << " ";
 
         std::cout << "\n";
@@ -551,23 +557,55 @@ print_summary(const Config& cfg)
     {
         std::cout << "[DETECTIONS] DISABLED\n";
         std::cout << "  Reason:\n";
-        if (!cfg.det_dir.empty())
+        if (!cfg.m_det_dir.empty())
         {
-            std::cout << "   - det_dir provided but module incomplete\n";
+            std::cout << "   - m_det_dir provided but module incomplete\n";
         }
         else
         {
-            std::cout << "   - det_dir not provided -> module ignored\n";
+            std::cout << "   - m_det_dir not provided -> module ignored\n";
         }
 
-        if (!cfg.classes.empty() ||
-            !cfg.filtered_topic.empty())
+        if (!cfg.m_classes.empty() ||
+            !cfg.m_topic.empty())
         {
             std::cout
                 << "   - partial detection args were ignored\n";
         }
         std::cout << "\n";
     }
+    if (cfg.use_sk)
+    {
+        std::cout << "[SEMANTIC KITTI] ENABLED\n";
+        std::cout << "  dir            : " << cfg.sk_lbl_dir << "\n";
+        std::cout << "  topic          : " << cfg.sk_topic << "\n";
+        std::cout << "  classes        : " ;
+
+        for (const auto& c : cfg.sk_classes)
+            std::cout << c << " "; 
+    }
+    else
+    {
+        std::cout << "[SEMANTIC KITTI] DISABLED\n";
+        std::cout << "  Reason:\n";
+        if (!cfg.sk_lbl_dir.empty())
+        {
+            std::cout << "   - sk_lbl_dir provided but module incomplete\n";
+        }
+        else
+        {
+            std::cout << "   - sk_lbl_dir not provided -> module ignored\n";
+        }
+
+        if (!cfg.sk_classes.empty() ||
+            !cfg.sk_topic.empty())
+        {
+            std::cout
+                << "   - partial semantic kitti args were ignored\n";
+        }
+        std::cout << "\n";
+    }
+
     std::cout << "=====================================\n\n";
 }
 
@@ -600,19 +638,32 @@ validate(const Config& cfg)
             throw std::invalid_argument("img_topic neccessary if images are used");
     }
 
-    // Detections related
+    // 3D-MOOD Detections related
     if (cfg.use_detections)
     {
-        if (!fs::exists(cfg.det_dir) || !fs::is_directory(cfg.det_dir))
-            throw std::invalid_argument("det_dir invalid");
+        if (!fs::exists(cfg.m_det_dir) || !fs::is_directory(cfg.m_det_dir))
+            throw std::invalid_argument("m_det_dir invalid");
 
-        if (cfg.score < 0.0 || cfg.score > 1.0)
-            throw std::invalid_argument("score is out of range [0.0, 1.0]");
+        if (cfg.m_score < 0.0 || cfg.m_score > 1.0)
+            throw std::invalid_argument("m_score is out of range [0.0, 1.0]");
 
-        if (cfg.filtered_topic.empty())
-            throw std::invalid_argument("filtered_topic neccesary to publish filtered point clouds");
+        if (cfg.m_topic.empty())
+            throw std::invalid_argument("m_topic neccesary to publish filtered point clouds");
 
-        if (cfg.classes.empty())
+        if (cfg.m_classes.empty())
+            throw std::invalid_argument("Classes to filter must be provided");
+    }
+
+    // Semantic kitti related
+    if (cfg.use_sk)
+    {
+       if (!fs::exists(cfg.sk_lbl_dir) || !fs::is_directory(cfg.sk_lbl_dir))
+            throw std::invalid_argument("sk_lbl_dir invalid");
+
+        if (cfg.sk_topic.empty())
+            throw std::invalid_argument("sk_topic neccesary to publish filtered point clouds");
+
+        if (cfg.sk_classes.empty())
             throw std::invalid_argument("Classes to filter must be provided");
     }
 }
@@ -638,17 +689,22 @@ parse_arguments(int argc, char* argv[])
         // Output
         ("o,rosbag_out", "Output rosbag path (REQUIRED)", cxxopts::value<fs::path>(cfg.rosbag_out))
 
-        // Imágenes
+        // Images
         ("i,img_dir", "Input images folder path", cxxopts::value<fs::path>())
 
         ("img_topic", "Input images topic", cxxopts::value<std::string>())
 
-        // Filter
-        ("d,det_dir", "Detections folder path", cxxopts::value<fs::path>())
-        ("s,score", "Min score threshold", cxxopts::value<double>())
-        ("filtered_topic", "Filtered point clouds topic name", cxxopts::value<std::string>())
-        ("max_dist", "Maximum detection distance", cxxopts::value<double>())
-        ("c,classes", "Classes to filter (c1,c2,c3,...)", cxxopts::value<std::vector<std::string>>())
+        // 3D-MOOD filter parameters
+        ("m_det_dir", "Detections folder path [3D-MOOD argument]", cxxopts::value<fs::path>())
+        ("m_score", "Min score threshold [3D-MOOD argument]", cxxopts::value<double>())
+        ("m_topic", "Filtered point clouds topic name [3D-MOOD argument]", cxxopts::value<std::string>())
+        ("m_max_dist", "Maximum detection distance [3D-MOOD argument]", cxxopts::value<double>())
+        ("m_classes", "Classes to filter (c1,c2,c3,...) [3D-MOOD argument]", cxxopts::value<std::vector<std::string>>())
+
+        // Semantic kitti filter parameters
+        ("sk_lbl_dir", "Semantic kitti labels folder path [Sem Kitti argument]", cxxopts::value<fs::path>())
+        ("sk_topic", "Filtered point clouds topic name [Sem Kitti argument]", cxxopts::value<std::string>())
+        ("sk_classes", "Classes to filter (c1,c2,c3,...) [Sem Kitti argument]", cxxopts::value<std::vector<std::string>>())
 
         ("h,help", "Show help");
 
@@ -692,37 +748,56 @@ parse_arguments(int argc, char* argv[])
     }
 
     // Detecciones → activar módulo solo si existe dir
-    if (result.count("det_dir"))
+    if (result.count("m_det_dir"))
     {
         cfg.use_detections = true;
 
-        cfg.det_dir = result["det_dir"].as<fs::path>();
+        cfg.m_det_dir = result["m_det_dir"].as<fs::path>();
 
-        if (!result.count("score") ||
-            !result.count("filtered_topic") ||
-            !result.count("classes"))
+        if (!result.count("m_score") ||
+            !result.count("m_topic") ||
+            !result.count("m_classes"))
         {
-            throw std::invalid_argument("det_dir requires score, filtered_topic and classes");
+            throw std::invalid_argument("m_det_dir requires m_score, m_topic and m_classes");
         }
 
-        cfg.score = result["score"].as<double>();
+        cfg.m_score = result["m_score"].as<double>();
 
-        cfg.filtered_topic = result["filtered_topic"].as<std::string>();
+        cfg.m_topic = result["m_topic"].as<std::string>();
 
-        auto class_vec = result["classes"].as<std::vector<std::string>>();
+        auto class_vec = result["m_classes"].as<std::vector<std::string>>();
 
-        cfg.classes = std::unordered_set<std::string>(class_vec.begin(), class_vec.end());
+        cfg.m_classes = std::unordered_set<std::string>(class_vec.begin(), class_vec.end());
 
-        // Validate max_dist argument here since it has a default value
-        if (result.count("max_dist")) {
-            double input_dist = result["max_dist"].as<double>();
+        // Validate m_max_dist argument here since it has a default value
+        if (result.count("m_max_dist")) {
+            double input_dist = result["m_max_dist"].as<double>();
 
             if (input_dist >= 0.0) {
-                cfg.max_dist = input_dist;
+                cfg.m_max_dist = input_dist;
             } else {
-                throw std::invalid_argument("max_dist is invalid [max_dist >= 0.0]");
+                throw std::invalid_argument("m_max_dist is invalid [m_max_dist >= 0.0]");
             }
         }
+    }
+
+    if (result.count("m_det_dir"))
+    {
+       cfg.use_sk = true;
+
+        cfg.sk_lbl_dir = result["sk_lbl_dir"].as<fs::path>();
+
+        if (!result.count("sk_topic") ||
+            !result.count("sk_classes"))
+        {
+            throw std::invalid_argument("sk_lbl_dir requires sk_topic and sk_classes");
+        }
+
+        cfg.sk_topic = result["sk_topic"].as<std::string>();
+
+        auto class_vec = result["sk_classes"].as<std::vector<std::string>>();
+
+        cfg.sk_classes = std::unordered_set<std::string>(class_vec.begin(), class_vec.end());
     }
 
     return cfg;
@@ -768,12 +843,12 @@ createTopics(rosbag2_cpp::Writer& writer, const Config& cfg)
     }
 
     if (cfg.use_detections) {
-        topic_info.name = cfg.filtered_topic;
+        topic_info.name = cfg.m_topic;
         topic_info.type = "sensor_msgs/msg/PointCloud2";
         topic_info.offered_qos_profiles = {};
 
         writer.create_topic(topic_info);
-        // std::cout << "[OK] " << cfg.filtered_topic << " topic created succesfully\n";
+        // std::cout << "[OK] " << cfg.m_topic << " topic created succesfully\n";
 
         topic_info.name = "/det_boxes";
         topic_info.type = "visualization_msgs/msg/MarkerArray";
@@ -874,7 +949,7 @@ writeRosbag(
 
     if (cfg.use_detections)
     {
-        detection_index = buildFileIndex(cfg.det_dir);
+        detection_index = buildFileIndex(cfg.m_det_dir);
     }
 
     std::string frame_id;
@@ -925,10 +1000,10 @@ writeRosbag(
             auto det_it = detection_index.find(frame_id);
 
             if (det_it != detection_index.end()) {
-                auto detections = loadDetections(det_it->second.string(), cfg.score, cfg.max_dist, cfg.classes);
+                auto detections = loadDetections(det_it->second.string(), cfg.m_score, cfg.m_max_dist, cfg.m_classes);
                 auto filtered_cloud = filterPointCloud(input_cloud, detections);
                 // Filtrar la nube primero
-                writeCloud(filtered_cloud, cfg.filtered_topic, writer, timestamps_ns[i]);
+                writeCloud(filtered_cloud, cfg.m_topic, writer, timestamps_ns[i]);
 
                 visualization_msgs::msg::MarkerArray marker_array;
 
