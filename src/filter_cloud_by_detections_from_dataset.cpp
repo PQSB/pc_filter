@@ -579,7 +579,7 @@ print_summary(const Config& cfg)
         std::cout << "[DETECTIONS] ENABLED\n";
         std::cout << "  dir            : " << cfg.m_det_dir << "\n";
         std::cout << "  score          : " << cfg.m_score << "\n";
-        std::cout << "  topic : " << cfg.m_topic << "\n";
+        std::cout << "  topic          : " << cfg.m_topic << "\n";
         std::cout << "  max_dist       : " << cfg.m_max_dist << "\n";
         std::cout << "  classes        : ";
 
