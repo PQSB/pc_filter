@@ -34,24 +34,24 @@
 constexpr double MAX_DIST_DEFAULT = -1.0;
 
 const std::unordered_map<std::string, int> semantic_kitti_classes = {
-    // Clases Especiales y Vehículos (Estáticos)
+    // Static
     {"unlabeled", 0}, {"outlier", 1}, {"car", 10}, {"bicycle", 11}, {"bus", 13}, {"motorcycle", 15},
     {"on-rails", 16}, {"truck", 17}, {"other-vehicle", 20},
 
-    // Peatones y Ciclistas (Estáticos)
+    // Static
     {"person", 30},{"bicyclist", 31},{"motorcyclist", 32},
 
-    // Terreno y Carretera
+    // Terrain and road
     {"road", 40}, {"parking", 44}, {"sidewalk", 48}, {"other-ground", 49},
 
-    // Estructuras y Vegetación
+    // Vegetation and structures
     {"building", 50}, {"fence", 51}, {"other-structure", 52}, {"lane-marking", 60},
     {"vegetation", 70}, {"trunk", 71}, {"terrain", 72},
 
-    // Objetos del Entorno
+    // Objects
     {"pole", 80}, {"traffic-sign", 81}, {"other-object", 99},
 
-    // Clases Dinámicas (Objetos en Movimiento)
+    // Dynamic classes
     {"moving-car", 252}, {"moving-bicyclist", 253}, {"moving-person", 254},
     {"moving-motorcyclist", 255}, {"moving-on-rails", 256}, {"moving-bus", 257},
     {"moving-truck", 258}, {"moving-other-vehicle", 259}
@@ -102,14 +102,16 @@ struct Config
     fs::path sk_lbl_dir;
     std::string sk_topic;
     std::unordered_set<std::string> sk_classes;
+    double sk_max_dist = MAX_DIST_DEFAULT;
 };
 
 pcl::PointCloud<pcl::PointXYZI>::Ptr
 semantic_kitti_filter(
   const std::unordered_set<std::string>& classes2filter,
+  double sk_max_dist, 
   pcl::PointCloud<pcl::PointXYZI>::Ptr& input_cloud,
   fs::path lbl_path,
-  std::vector<int64_t> original_indices)
+  const std::vector<int64_t> & original_indices)
 {
     pcl::PointCloud<pcl::PointXYZI>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZI>());
 
@@ -131,34 +133,40 @@ semantic_kitti_filter(
         }
     }
 
-    // Vector optimizado (uint16_t) para almacenar solo la clase semántica limpia
     std::vector<uint16_t> all_labels;
-    uint32_t temp_label; // Mantiene 32 bits para leer correctamente bloques de 4 bytes del archivo
+    uint32_t temp_label; // lbl file size
 
-    // Leer y limpiar inmediatamente en cada iteración
     while (label_file.read(reinterpret_cast<char*>(&temp_label), sizeof(uint32_t))) {
-        // Extrae los 16 bits inferiores (ID de clase) y descarta los superiores (instancia)
+        // Extract just the class id bits
         all_labels.push_back(temp_label & 0xFFFF);
     }
 
-    // Reservar memoria estimada en la nueva nube para mejorar el rendimiento
     filtered_cloud->reserve(input_cloud->size());
 
-    // Filtrar los puntos recorriendo la nube actual
+    double max_dist_sq = sk_max_dist * sk_max_dist;
+    double dist_sq;
+
     for (size_t i = 0; i < input_cloud->size(); ++i) {
-        // Recuperar la posición que tenía este punto en la nube original antes del FOV
+        // Recover the original index the point had before the FOV filter
         int orig_idx = original_indices[i];
 
-        // Control de seguridad: evitar desbordamientos de memoria si el índice es inválido
-        if (orig_idx < 0 || orig_idx >= static_cast<int>(all_labels.size())) {
-            std::cerr << "Error: Índice original " << orig_idx << " fuera de rango del archivo de etiquetas." << std::endl;
-            continue; 
+        if (sk_max_dist != MAX_DIST_DEFAULT){
+            const auto & point = input_cloud->points[i];
+            // To avoid using sqrt
+            dist_sq = (point.x * point.x) + (point.y * point.y);
+            if (dist_sq > max_dist_sq) {
+                filtered_cloud->push_back(input_cloud->points[i]);
+                continue;
+            }
         }
 
-        // La clase ya viene limpia desde el vector all_labels (gracias al filtro en la lectura)
+        if (orig_idx < 0 || orig_idx >= static_cast<int>(all_labels.size())) {
+            throw std::runtime_error("[ERROR] Index " + std::to_string(orig_idx) + "out of lbl labels file range");
+        }
+
         uint16_t semantic_class = all_labels[orig_idx];
 
-        // Si la clase NO está en el conjunto de eliminación, el punto es válido y lo guardamos
+        // Check if the point is valid and add it in case it is
         if (numeric_ids_to_remove.find(semantic_class) == numeric_ids_to_remove.end()) {
             filtered_cloud->push_back(input_cloud->points[i]);
         }
@@ -253,7 +261,7 @@ FUNCIÓN LEER DETECCIONES DE FICHERO TEMPORAL A FALTA DE MODIFICAR LA DE LA LIBR
 */
 std::vector<Detection>
 loadDetections(
-    const fs::path det_file,
+    const fs::path & det_file,
     double m_score_threshold,
     double m_max_dist,
     const std::unordered_set<std::string>& allowed_classes)
@@ -286,7 +294,7 @@ loadDetections(
         // Check if the filter is active
         if (m_max_dist != MAX_DIST_DEFAULT){
             // To avoid using sqrt
-            double dist_sq = (det.x * det.x) + (det.y * det.y) + (det.z * det.z);
+            double dist_sq = (det.x * det.x) + (det.y * det.y);
             if (dist_sq > m_max_dist_sq) {continue;}
         }
 
@@ -370,9 +378,7 @@ filterPointCloud(
     extract.setInputCloud(cloud);
     extract.setIndices(indices_to_keep);
 
-    // Conservar únicamente los puntos
-    // que están dentro de las detecciones
-    extract.setNegative(false);
+    extract.setNegative(true);
 
     extract.filter(*filtered_cloud);
 
@@ -570,7 +576,7 @@ print_summary(const Config& cfg)
 
     if (cfg.use_detections)
     {
-        std::cout << "[3D-MOOD DETECTIONS] ENABLED\n";
+        std::cout << "[DETECTIONS] ENABLED\n";
         std::cout << "  dir            : " << cfg.m_det_dir << "\n";
         std::cout << "  score          : " << cfg.m_score << "\n";
         std::cout << "  topic : " << cfg.m_topic << "\n";
@@ -580,7 +586,7 @@ print_summary(const Config& cfg)
         for (const auto& c : cfg.m_classes)
             std::cout << c << " ";
 
-        std::cout << "\n";
+        std::cout << "\n\n";
     }
     else
     {
@@ -601,13 +607,14 @@ print_summary(const Config& cfg)
             std::cout
                 << "   - partial detection args were ignored\n";
         }
-        std::cout << "\n";
+        std::cout << "\n\n";
     }
     if (cfg.use_sk)
     {
         std::cout << "[SEMANTIC KITTI] ENABLED\n";
         std::cout << "  dir            : " << cfg.sk_lbl_dir << "\n";
         std::cout << "  topic          : " << cfg.sk_topic << "\n";
+        std::cout << "  max_dist       : " << cfg.sk_max_dist << "\n";
         std::cout << "  classes        : " ;
 
         for (const auto& c : cfg.sk_classes)
@@ -722,17 +729,18 @@ parse_arguments(int argc, char* argv[])
 
         ("img_topic", "Input images topic", cxxopts::value<std::string>())
 
-        // 3D-MOOD filter parameters
-        ("m_det_dir", "Detections folder path [3D-MOOD argument]", cxxopts::value<fs::path>())
-        ("m_score", "Min score threshold [3D-MOOD argument]", cxxopts::value<double>())
-        ("m_topic", "Filtered point clouds topic name [3D-MOOD argument]", cxxopts::value<std::string>())
-        ("m_max_dist", "Maximum detection distance [3D-MOOD argument]", cxxopts::value<double>())
-        ("m_classes", "Classes to filter (c1,c2,c3,...) [3D-MOOD argument]", cxxopts::value<std::vector<std::string>>())
+        // MODEL filter parameters
+        ("m_det_dir", "Detections folder path [MODEL argument]", cxxopts::value<fs::path>())
+        ("m_score", "Min score threshold [MODEL argument]", cxxopts::value<double>())
+        ("m_topic", "Filtered point clouds topic name [MODEL argument]", cxxopts::value<std::string>())
+        ("m_max_dist", "Maximum detection distance [MODEL argument]", cxxopts::value<double>())
+        ("m_classes", "Classes to filter (c1,c2,c3,...) [MODEL argument]", cxxopts::value<std::vector<std::string>>())
 
         // Semantic kitti filter parameters
         ("sk_lbl_dir", "Semantic kitti labels folder path [Sem Kitti argument]", cxxopts::value<fs::path>())
         ("sk_topic", "Filtered point clouds topic name [Sem Kitti argument]", cxxopts::value<std::string>())
         ("sk_classes", "Classes to filter (c1,c2,c3,...) [Sem Kitti argument]", cxxopts::value<std::vector<std::string>>())
+        ("sk_max_dist", "Maximum point distance to filter[Sem Kitti argument]", cxxopts::value<double>())
 
         ("h,help", "Show help");
 
@@ -826,6 +834,16 @@ parse_arguments(int argc, char* argv[])
         auto class_vec = result["sk_classes"].as<std::vector<std::string>>();
 
         cfg.sk_classes = std::unordered_set<std::string>(class_vec.begin(), class_vec.end());
+
+        if (result.count("sk_max_dist")) {
+            double input_dist = result["sk_max_dist"].as<double>();
+
+            if (input_dist >= 0.0) {
+                cfg.sk_max_dist = input_dist;
+            } else {
+                throw std::invalid_argument("sk_max_dist is invalid [sk_max_dist >= 0.0]");
+            }
+        }
     }
 
     return cfg;
@@ -1034,7 +1052,7 @@ writeRosbag(
             auto sk_it = sk_index.find(frame_id);
 
             if (sk_it != sk_index.end()) {
-                auto sk_filtered_cloud = semantic_kitti_filter(cfg.sk_classes, input_cloud, sk_it->second.string(), corr);
+                auto sk_filtered_cloud = semantic_kitti_filter(cfg.sk_classes, cfg.sk_max_dist, input_cloud, sk_it->second.string(), corr);
                 writeCloud(sk_filtered_cloud, cfg.sk_topic, writer, timestamps_ns[i]);
 
             } else {
