@@ -80,10 +80,10 @@ ament_target_dependencies(pc_filter_lib ${dependencies})
 # --- NUEVO: Enlazar PCL y Eigen a tu librería ---
 target_link_libraries(pc_filter_lib ${PCL_LIBRARIES} Eigen3::Eigen)
 
-add_executable(rosbag_pc_filter src/filter_cloud_by_detections.cpp)
-ament_target_dependencies(rosbag_pc_filter ${dependencies})
-# --- NUEVO: Enlazar PCL y Eigen al nodo ejecutable ---
-target_link_libraries(rosbag_pc_filter ${PROJECT_NAME} pc_filter_lib ${PCL_LIBRARIES} Eigen3::Eigen)
+# add_executable(rosbag_pc_filter src/filter_cloud_by_detections.cpp)
+# ament_target_dependencies(rosbag_pc_filter ${dependencies})
+# # --- NUEVO: Enlazar PCL y Eigen al nodo ejecutable ---
+# target_link_libraries(rosbag_pc_filter ${PROJECT_NAME} pc_filter_lib ${PCL_LIBRARIES} Eigen3::Eigen)
 
 add_executable(dataset_pc_filter src/filter_cloud_by_detections_from_dataset.cpp)
 ament_target_dependencies(dataset_pc_filter ${dependencies})
@@ -95,7 +95,7 @@ install(DIRECTORY include/ DESTINATION include)
 
 install(TARGETS
   ${PROJECT_NAME}
-  rosbag_pc_filter
+  #rosbag_pc_filter
   dataset_pc_filter
   pc_filter_lib
   ARCHIVE DESTINATION lib
