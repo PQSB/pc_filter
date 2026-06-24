@@ -103,6 +103,8 @@ struct Config
     std::string sk_topic;
     std::unordered_set<std::string> sk_classes;
     double sk_max_dist = MAX_DIST_DEFAULT;
+
+    bool no_confirm;
 };
 
 pcl::PointCloud<pcl::PointXYZI>::Ptr
@@ -607,7 +609,7 @@ print_summary(const Config& cfg)
             std::cout
                 << "   - partial detection args were ignored\n";
         }
-        std::cout << "\n\n";
+        std::cout << "\n";
     }
     if (cfg.use_sk)
     {
@@ -742,6 +744,9 @@ parse_arguments(int argc, char* argv[])
         ("sk_classes", "Classes to filter (c1,c2,c3,...) [Sem Kitti argument]", cxxopts::value<std::vector<std::string>>())
         ("sk_max_dist", "Maximum point distance to filter[Sem Kitti argument]", cxxopts::value<double>())
 
+        // Skips argument user confirmation (to allow fast executions)
+        ("no_confirm", "Skips the user arguments confirmation (NOTE: pure flag; any provided value using '=' will be ignored and treated as true")
+
         ("h,help", "Show help");
 
     auto result = options.parse(argc, argv);
@@ -751,6 +756,8 @@ parse_arguments(int argc, char* argv[])
         std::cout << options.help() << "\n";
         exit(EXIT_SUCCESS);
     }
+
+    cfg.no_confirm = result.count("no_confirm") > 0;
 
     if (result.count("pc_topic"))
     {
@@ -1143,19 +1150,22 @@ int main(int argc, char* argv[])
         auto cfg = parse_arguments(argc, argv);
 
         validate(cfg);
-        print_summary(cfg);
-        std::cout << "Type [y|Y] to continue, or [ANY KEY] to cancel: ";
 
-        char input;
-        std::cin.get(input);
+        if (!cfg.no_confirm) {
+            print_summary(cfg);
+            std::cout << "Type [y|Y] to continue, or [ANY KEY] to cancel: ";
 
-        // if (!input.empty()) {
-        //     std::cout << "\n[ABORTED] EXECUTION ABORTED\n";
-        //     exit(EXIT_FAILURE);
-        // }
-        if (input != 'y' && input != 'Y') {
-            std::cout << "\n[ABORTED] EXECUTION ABORTED\n";
-            exit(EXIT_FAILURE);
+            char input;
+            std::cin.get(input);
+
+            // if (!input.empty()) {
+            //     std::cout << "\n[ABORTED] EXECUTION ABORTED\n";
+            //     exit(EXIT_FAILURE);
+            // }
+            if (input != 'y' && input != 'Y') {
+                std::cout << "\n[ABORTED] EXECUTION ABORTED\n";
+                exit(EXIT_FAILURE);
+            }
         }
 
         //std::cout << "[OK] configuration succesful\n";
