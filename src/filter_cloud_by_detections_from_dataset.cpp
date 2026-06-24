@@ -28,8 +28,8 @@
 #include <pcl/filters/crop_box.h>
 #include <pcl/filters/extract_indices.h>
 
-#include <visualization_msgs/msg/marker_array.hpp>
-#include <tf2/LinearMath/Quaternion.h>
+// #include <visualization_msgs/msg/marker_array.hpp>
+// #include <tf2/LinearMath/Quaternion.h>
 
 constexpr double MAX_DIST_DEFAULT = -1.0;
 
@@ -222,40 +222,40 @@ getFovFromFile(const fs::path& fov_file_path)
     return calib;
 }
 
-visualization_msgs::msg::Marker
-makeBoxMarker(const Detection& det, int64_t ts, int id) {
-    visualization_msgs::msg::Marker m;
+// visualization_msgs::msg::Marker
+// makeBoxMarker(const Detection& det, int64_t ts, int id) {
+//     visualization_msgs::msg::Marker m;
 
-    m.header.frame_id = "base_lidar";
-    m.header.stamp = rclcpp::Time(ts);
+//     m.header.frame_id = "base_lidar";
+//     m.header.stamp = rclcpp::Time(ts);
 
-    m.ns = "crop_boxes";
-    m.id = id;
-    m.type = visualization_msgs::msg::Marker::CUBE;
-    m.action = visualization_msgs::msg::Marker::ADD;
+//     m.ns = "crop_boxes";
+//     m.id = id;
+//     m.type = visualization_msgs::msg::Marker::CUBE;
+//     m.action = visualization_msgs::msg::Marker::ADD;
 
-    m.pose.position.x = det.x;
-    m.pose.position.y = det.y;
-    m.pose.position.z = det.z;
+//     m.pose.position.x = det.x;
+//     m.pose.position.y = det.y;
+//     m.pose.position.z = det.z;
 
-    tf2::Quaternion q;
-    q.setRPY(0.0, 0.0, det.ry);
-    m.pose.orientation.x = q.x();
-    m.pose.orientation.y = q.y();
-    m.pose.orientation.z = q.z();
-    m.pose.orientation.w = q.w();
+//     tf2::Quaternion q;
+//     q.setRPY(0.0, 0.0, det.ry);
+//     m.pose.orientation.x = q.x();
+//     m.pose.orientation.y = q.y();
+//     m.pose.orientation.z = q.z();
+//     m.pose.orientation.w = q.w();
 
-    m.scale.x = det.l;
-    m.scale.y = det.w;
-    m.scale.z = det.h;
+//     m.scale.x = det.l;
+//     m.scale.y = det.w;
+//     m.scale.z = det.h;
 
-    m.color.r = 1.0f; m.color.g = 0.0f; m.color.b = 0.0f; m.color.a = 0.5f;
+//     m.color.r = 1.0f; m.color.g = 0.0f; m.color.b = 0.0f; m.color.a = 0.5f;
     
-    // CAMBIO CLAVE: Controlado por DELETEALL, sin temporizadores reales
-    m.lifetime = rclcpp::Duration::from_seconds(0); 
+//     // CAMBIO CLAVE: Controlado por DELETEALL, sin temporizadores reales
+//     m.lifetime = rclcpp::Duration::from_seconds(0); 
     
-    return m;
-}
+//     return m;
+// }
 
 
 /*
@@ -1076,27 +1076,27 @@ writeRosbag(
                 // Filtrar la nube primero
                 writeCloud(filtered_cloud, cfg.m_topic, writer, timestamps_ns[i]);
 
-                visualization_msgs::msg::MarkerArray marker_array;
+                // visualization_msgs::msg::MarkerArray marker_array;
 
-                visualization_msgs::msg::Marker clean_marker;
-                clean_marker.header.frame_id = "base_lidar";
-                clean_marker.header.stamp = rclcpp::Time(timestamps_ns[i]);
-                clean_marker.ns = "crop_boxes";
-                clean_marker.action = visualization_msgs::msg::Marker::DELETEALL;
-                marker_array.markers.push_back(clean_marker);
+                // visualization_msgs::msg::Marker clean_marker;
+                // clean_marker.header.frame_id = "base_lidar";
+                // clean_marker.header.stamp = rclcpp::Time(timestamps_ns[i]);
+                // clean_marker.ns = "crop_boxes";
+                // clean_marker.action = visualization_msgs::msg::Marker::DELETEALL;
+                // marker_array.markers.push_back(clean_marker);
 
 
-                int id_contador = 0;
-                for (const auto& det : detections) {
-                    visualization_msgs::msg::Marker box = makeBoxMarker(det, timestamps_ns[i], id_contador++);
-                    marker_array.markers.push_back(box);
-                }
+                // int id_contador = 0;
+                // for (const auto& det : detections) {
+                //     visualization_msgs::msg::Marker box = makeBoxMarker(det, timestamps_ns[i], id_contador++);
+                //     marker_array.markers.push_back(box);
+                // }
 
-                writer.write<visualization_msgs::msg::MarkerArray>(
-                    marker_array, 
-                    "/det_boxes", 
-                    rclcpp::Time(timestamps_ns[i])
-                );
+                // writer.write<visualization_msgs::msg::MarkerArray>(
+                //     marker_array, 
+                //     "/det_boxes", 
+                //     rclcpp::Time(timestamps_ns[i])
+                // );
 
 
             } else {
