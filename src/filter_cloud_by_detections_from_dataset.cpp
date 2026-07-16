@@ -97,7 +97,7 @@ struct Config
     std::string det_topic;
     std::unordered_set<std::string> det_classes;
 
-    // Semantic kitti
+    // Semantic segmentation
     bool use_seg = false;
     fs::path seg_dir;
     std::string seg_topic;
@@ -112,7 +112,7 @@ struct Config
 };
 
 pcl::PointCloud<pcl::PointXYZI>::Ptr
-semantic_kitti_filter(
+semantic_seg_filter(
   const std::unordered_set<std::string>& classes2filter,
   double seg_max_dist, 
   pcl::PointCloud<pcl::PointXYZI>::Ptr& input_cloud,
@@ -124,7 +124,7 @@ semantic_kitti_filter(
     // Open lbl file (.label)
     std::ifstream label_file(lbl_path, std::ios::binary);
     if (!label_file.is_open()) {
-        throw std::runtime_error("[ERROR] Cannot open semantic kitti lbl file: " + lbl_path.string());
+        throw std::runtime_error("[ERROR] Cannot open semantic segmentation lbl file: " + lbl_path.string());
     }
 
     std::unordered_set<uint16_t> numeric_ids_to_remove;
@@ -135,7 +135,7 @@ semantic_kitti_filter(
         if (it != semantic_kitti_classes.end()) {
             numeric_ids_to_remove.insert(it->second);
         } else {
-            throw std::runtime_error("[ERROR] Category " + name + "doesn't exists in semantic kitti");
+            throw std::runtime_error("[ERROR] ID " + name + "is not in the provided ones");
         }
     }
 
@@ -510,13 +510,19 @@ print_summary(const Config& cfg)
     std::cout << "CONFIGURATION SUMMARY\n";
     std::cout << "=====================================\n";
 
+    std::cout << "[OUTPUT MODE]\n";
+    if (cfg.only_clouds) {
+        std::cout << "  Mode   : DIRECT FILES EXPORT (.bin)\n";
+        std::cout << "  output : " << cfg.clouds_out_dir << "\n\n";
+    } else {
+        std::cout << "  Mode   : ROSBAG EXPORT\n";
+        std::cout << "  output : " << cfg.rosbag_out << "\n\n";
+    }
+
     std::cout << "[POINTCLOUDS]\n";
     std::cout << "  dir   : " << cfg.pc_dir << "\n";
     std::cout << "  topic : " << cfg.pc_topic << "\n";
     std::cout << "  timestamps file : " << cfg.ts_file << "\n\n";
-
-    std::cout << "[OUTPUT]\n";
-    std::cout << "  output : " << cfg.rosbag_out << "\n\n";
 
     if (cfg.use_fov_filter)
     {
@@ -578,7 +584,7 @@ print_summary(const Config& cfg)
     }
     if (cfg.use_seg)
     {
-        std::cout << "[SEMANTIC KITTI] ENABLED\n";
+        std::cout << "[SEMANTIC SEGMENTATION] ENABLED\n";
         std::cout << "  dir            : " << cfg.seg_dir << "\n";
         std::cout << "  topic          : " << cfg.seg_topic << "\n";
         std::cout << "  max_dist       : " << cfg.seg_max_dist << "\n";
@@ -589,7 +595,7 @@ print_summary(const Config& cfg)
     }
     else
     {
-        std::cout << "[SEMANTIC KITTI] DISABLED\n";
+        std::cout << "[SEMANTIC SEGMENTATION] DISABLED\n";
         std::cout << "  Reason:\n";
         if (!cfg.seg_dir.empty())
         {
@@ -604,7 +610,7 @@ print_summary(const Config& cfg)
             !cfg.seg_topic.empty())
         {
             std::cout
-                << "   - partial semantic kitti args were ignored\n";
+                << "   - partial semantic segmentation args were ignored\n";
         }
     }
 
@@ -614,14 +620,27 @@ print_summary(const Config& cfg)
 void
 validate(const Config& cfg)
 {
+    bool has_rosbag = !cfg.rosbag_out.empty();
+    bool has_clouds = !cfg.clouds_out_dir.empty();
+
+    if (has_rosbag && has_clouds) {
+        throw std::invalid_argument("Conflicting arguments: Cannot provide both 'rosbag_out' and 'clouds_out_dir'");
+    }
+    if (!has_rosbag && !has_clouds) {
+        throw std::invalid_argument("Missing output argument: You must provide either 'rosbag_out' or 'clouds_out_dir'");
+    }
+
     // Needed
     if (!fs::exists(cfg.pc_dir) || !fs::is_directory(cfg.pc_dir))
         throw std::invalid_argument("pc_dir invalid");
 
-    // ts_file and rosbag_out only if only_clouds is not used
     if (cfg.only_clouds) {
         if (cfg.clouds_out_dir.empty()) {
             throw std::invalid_argument("clouds_out_dir must be provided when only_clouds is enabled");
+        }
+
+        if (!cfg.ts_file.empty()) {
+            throw std::invalid_argument("ts_file is not supported in only_clouds mode (timestamps are only needed for rosbag output)");
         }
 
         if (fs::exists(cfg.clouds_out_dir) && !fs::is_directory(cfg.clouds_out_dir)) {
@@ -632,8 +651,8 @@ validate(const Config& cfg)
         if (!cfg.use_detections && !cfg.use_seg) {
             throw std::invalid_argument("only_clouds mode requires enabling either detections (use_detections) or segmentation (use_seg)");
         }
-        if (cfg.use_images || cfg.export_input_pc) {
-            throw std::invalid_argument("use_images and export_input_pc are not supported in only_clouds mode");
+        if (cfg.use_images) {
+            throw std::invalid_argument("Images (image_dir) are not supported in only_clouds mode");
         }
 
         // ROS topics are not used since no rosbag is generated
@@ -681,6 +700,9 @@ validate(const Config& cfg)
 
         if (!cfg.only_clouds && cfg.det_topic.empty())
             throw std::invalid_argument("det_topic is necessary to publish filtered point clouds");
+
+        if (cfg.det_max_dist != MAX_DIST_DEFAULT && cfg.det_max_dist < 0.0)
+            throw std::invalid_argument("det_max_dist must be >= 0.0");
     }
 
     // Semantic Segmentation
@@ -694,6 +716,9 @@ validate(const Config& cfg)
 
         if (!cfg.only_clouds && cfg.seg_topic.empty())
             throw std::invalid_argument("seg_topic is necessary to publish filtered point clouds");
+
+        if (cfg.seg_max_dist != MAX_DIST_DEFAULT && cfg.seg_max_dist < 0.0)
+            throw std::invalid_argument("seg_max_dist must be >= 0.0");
     }
 }
 
@@ -716,22 +741,22 @@ parse_arguments(int argc, char* argv[])
         ("fov_filter", "Preprocessed file generated with prepare_fov_filter_calib_file.py", cxxopts::value<fs::path>())
 
         // Output
-        ("o,rosbag_out", "Output rosbag path (REQUIRED)", cxxopts::value<fs::path>(cfg.rosbag_out))
+        ("rosbag_out", "Output rosbag path (Selects rosbag output)", cxxopts::value<fs::path>(cfg.rosbag_out))
 
         // Images
         ("i,img_dir", "Input images folder path", cxxopts::value<fs::path>())
 
         ("img_topic", "Input images topic", cxxopts::value<std::string>())
 
-        // MODEL filter parameters
+        // Detector filter parameters
         ("det_dir", "Detections folder path [Detector argument]", cxxopts::value<fs::path>())
         ("det_score", "Min score threshold [Detector argument]", cxxopts::value<double>())
         ("det_topic", "Filtered point clouds topic name [Detector argument]", cxxopts::value<std::string>())
         ("det_max_dist", "Maximum detection distance [Detector argument]", cxxopts::value<double>())
         ("det_classes", "Classes to filter (c1,c2,c3,...) [Detector argument]", cxxopts::value<std::vector<std::string>>())
 
-        // Semantic kitti filter parameters
-        ("seg_dir", "Semantic kitti labels folder path [Segmentation argument]", cxxopts::value<fs::path>())
+        // Semantic segmentation filter parameters
+        ("seg_dir", "Semantic segmentation labels folder path [Segmentation argument]", cxxopts::value<fs::path>())
         ("seg_topic", "Filtered point clouds topic name [Segmentation argument]", cxxopts::value<std::string>())
         ("seg_classes", "ID of the classes to filter (id1,id2,id3,...) [Segmentation argument]", cxxopts::value<std::vector<std::string>>())
         ("seg_max_dist", "Maximum point distance to filter[Segmentation argument]", cxxopts::value<double>())
@@ -740,7 +765,7 @@ parse_arguments(int argc, char* argv[])
         ("no_confirm", "Skips the user arguments confirmation (NOTE: pure flag; any provided value using '=' will be ignored and treated as true")
 
         // To export just filtered clouds directly to a file without generating a new rosbag
-        ("only_clouds_out", "Output directory to save filtered clouds (no rosbag)", cxxopts::value<fs::path>())
+        ("clouds_out_dir", "Output directory to save just the filtered clouds, no rosbag (Selects files output)", cxxopts::value<fs::path>())
 
         ("h,help", "Show help");
 
@@ -754,9 +779,9 @@ parse_arguments(int argc, char* argv[])
 
     cfg.no_confirm = result.count("no_confirm") > 0;
 
-    if (result.count("only_clouds_out")) {
+    if (result.count("clouds_out_dir")) {
         cfg.only_clouds = true;
-        cfg.clouds_out_dir = result["only_clouds_out"].as<fs::path>();
+        cfg.clouds_out_dir = result["clouds_out_dir"].as<fs::path>();
     }
 
     if (result.count("pc_topic"))
@@ -772,84 +797,60 @@ parse_arguments(int argc, char* argv[])
 
         // Add check of fov_file before filling FovCalibration
         if (!fs::exists(cfg.fov_file) || !fs::is_regular_file(cfg.fov_file))
-        throw std::invalid_argument("fov_file invalid");
+        throw std::invalid_argument("fov_file is invalid or does not exist");
 
         // Fill the FovCalibration struct
         cfg.fov_params = getFovFromFile(cfg.fov_file);
     }
 
-    // Imágenes → activar módulo solo si existe dir
     if (result.count("img_dir"))
     {
         cfg.use_images = true;
         cfg.img_dir = result["img_dir"].as<fs::path>();
 
-        if (!result.count("img_topic"))
-            throw std::invalid_argument("img_dir requires img_topic");
-
-        cfg.img_topic = result["img_topic"].as<std::string>();
+        if (result.count("img_topic"))
+            cfg.img_topic = result["img_topic"].as<std::string>();
     }
 
-    // Detecciones → activar módulo solo si existe dir
     if (result.count("det_dir"))
     {
         cfg.use_detections = true;
-
         cfg.det_dir = result["det_dir"].as<fs::path>();
 
-        if (!result.count("det_score") ||
-            !result.count("det_topic") ||
-            !result.count("det_classes"))
-        {
-            throw std::invalid_argument("det_dir requires det_score, det_topic and det_classes");
+        if (result.count("det_score")) {
+            cfg.det_score = result["det_score"].as<double>();
+        }
+        
+        if (result.count("det_topic")) {
+            cfg.det_topic = result["det_topic"].as<std::string>();
         }
 
-        cfg.det_score = result["det_score"].as<double>();
+        if (result.count("det_classes")) {
+            auto class_vec = result["det_classes"].as<std::vector<std::string>>();
+            cfg.det_classes = std::unordered_set<std::string>(class_vec.begin(), class_vec.end());
+        }
 
-        cfg.det_topic = result["det_topic"].as<std::string>();
-
-        auto class_vec = result["det_classes"].as<std::vector<std::string>>();
-
-        cfg.det_classes = std::unordered_set<std::string>(class_vec.begin(), class_vec.end());
-
-        // Validate det_max_dist argument here since it has a default value
         if (result.count("det_max_dist")) {
-            double input_dist = result["det_max_dist"].as<double>();
-
-            if (input_dist >= 0.0) {
-                cfg.det_max_dist = input_dist;
-            } else {
-                throw std::invalid_argument("det_max_dist is invalid [det_max_dist >= 0.0]");
-            }
+            cfg.det_max_dist = result["det_max_dist"].as<double>();
         }
     }
 
     if (result.count("seg_dir"))
     {
-       cfg.use_seg = true;
-
+        cfg.use_seg = true;
         cfg.seg_dir = result["seg_dir"].as<fs::path>();
 
-        if (!result.count("seg_topic") ||
-            !result.count("seg_classes"))
-        {
-            throw std::invalid_argument("seg_dir requires seg_topic and seg_classes");
+        if (result.count("seg_topic")) {
+            cfg.seg_topic = result["seg_topic"].as<std::string>();
         }
 
-        cfg.seg_topic = result["seg_topic"].as<std::string>();
-
-        auto class_vec = result["seg_classes"].as<std::vector<std::string>>();
-
-        cfg.seg_classes = std::unordered_set<std::string>(class_vec.begin(), class_vec.end());
+        if (result.count("seg_classes")) {
+            auto class_vec = result["seg_classes"].as<std::vector<std::string>>();
+            cfg.seg_classes = std::unordered_set<std::string>(class_vec.begin(), class_vec.end());
+        }
 
         if (result.count("seg_max_dist")) {
-            double input_dist = result["seg_max_dist"].as<double>();
-
-            if (input_dist >= 0.0) {
-                cfg.seg_max_dist = input_dist;
-            } else {
-                throw std::invalid_argument("seg_max_dist is invalid [seg_max_dist >= 0.0]");
-            }
+            cfg.seg_max_dist = result["seg_max_dist"].as<double>();
         }
     }
 
@@ -994,7 +995,7 @@ writeRosbag(
 
     std::unordered_map<std::string, fs::path> image_index;
     std::unordered_map<std::string, fs::path> detection_index;
-    std::unordered_map<std::string, fs::path> sk_index;
+    std::unordered_map<std::string, fs::path> seg_index;
 
     if (cfg.use_images)
     {
@@ -1008,7 +1009,7 @@ writeRosbag(
 
     if (cfg.use_seg)
     {
-        sk_index = buildFileIndex(cfg.seg_dir);
+        seg_index = buildFileIndex(cfg.seg_dir);
     }
 
     std::string frame_id;
@@ -1056,14 +1057,14 @@ writeRosbag(
         }
 
         if (cfg.use_seg) {
-            auto sk_it = sk_index.find(frame_id);
+            auto seg_it = seg_index.find(frame_id);
 
-            if (sk_it != sk_index.end()) {
-                auto sk_filtered_cloud = semantic_kitti_filter(cfg.seg_classes, cfg.seg_max_dist, input_cloud, sk_it->second.string(), corr);
+            if (seg_it != seg_index.end()) {
+                auto sk_filtered_cloud = semantic_seg_filter(cfg.seg_classes, cfg.seg_max_dist, input_cloud, seg_it->second.string(), corr);
                 writeCloud(sk_filtered_cloud, cfg.seg_topic, writer, timestamps_ns[i]);
 
             } else {
-                throw std::runtime_error("Missing semantic kitti lbl file for frame: " + frame_id);
+                throw std::runtime_error("Missing semantic segmentation lbl file for frame: " + frame_id);
             }
         }
 
@@ -1073,31 +1074,8 @@ writeRosbag(
             if (det_it != detection_index.end()) {
                 auto detections = loadDetections(det_it->second.string(), cfg.det_score, cfg.det_max_dist, cfg.det_classes);
                 auto filtered_cloud = filterPointCloud(input_cloud, detections);
-                // Filtrar la nube primero
+                // Filter the cloud first
                 writeCloud(filtered_cloud, cfg.det_topic, writer, timestamps_ns[i]);
-
-                // visualization_msgs::msg::MarkerArray marker_array;
-
-                // visualization_msgs::msg::Marker clean_marker;
-                // clean_marker.header.frame_id = "base_lidar";
-                // clean_marker.header.stamp = rclcpp::Time(timestamps_ns[i]);
-                // clean_marker.ns = "crop_boxes";
-                // clean_marker.action = visualization_msgs::msg::Marker::DELETEALL;
-                // marker_array.markers.push_back(clean_marker);
-
-
-                // int id_contador = 0;
-                // for (const auto& det : detections) {
-                //     visualization_msgs::msg::Marker box = makeBoxMarker(det, timestamps_ns[i], id_contador++);
-                //     marker_array.markers.push_back(box);
-                // }
-
-                // writer.write<visualization_msgs::msg::MarkerArray>(
-                //     marker_array, 
-                //     "/det_boxes", 
-                //     rclcpp::Time(timestamps_ns[i])
-                // );
-
 
             } else {
                 throw std::runtime_error("Missing detections for frame: " + frame_id);
@@ -1143,6 +1121,95 @@ generate_rosbag(const Config& cfg,  const std::vector<int64_t>& timestamps_ns)
     writeRosbag(writer, cfg, point_cloud_files, timestamps_ns);
 }
 
+void
+savePointCloudXYZI(const fs::path& filepath, const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud)
+{
+    std::ofstream file(filepath, std::ios::binary);
+    if (!file.is_open()) {
+        throw std::runtime_error("Cannot open file for writing: " + filepath.string());
+    }
+
+    // Create the vector with the correct size
+    std::vector<float> buffer(cloud->points.size() * 4);
+
+    // Fill the vector by index
+    size_t i = 0;
+    for (const auto& pt : cloud->points) {
+        buffer[i++] = pt.x;
+        buffer[i++] = pt.y;
+        buffer[i++] = pt.z;
+        buffer[i++] = pt.intensity;
+    }
+
+    // Write the reult in file
+    file.write(reinterpret_cast<const char*>(buffer.data()), buffer.size() * sizeof(float));
+
+    file.close();
+}
+
+void
+export_clouds_to_directory(const Config& cfg)
+{
+    auto point_cloud_files = getPointCloudFiles(cfg.pc_dir);
+
+    fs::path det_out_dir;
+    fs::path seg_out_dir;
+
+    // Crear subcarpetas según los filtros activos
+    if (cfg.use_detections) {
+        det_out_dir = cfg.clouds_out_dir / "detections";
+        fs::create_directories(det_out_dir);
+    }
+    if (cfg.use_seg) {
+        seg_out_dir = cfg.clouds_out_dir / "segmentation";
+        fs::create_directories(seg_out_dir);
+    }
+
+    std::unordered_map<std::string, fs::path> detection_index;
+    std::unordered_map<std::string, fs::path> seg_index;
+
+    if (cfg.use_detections) detection_index = buildFileIndex(cfg.det_dir);
+    if (cfg.use_seg) seg_index = buildFileIndex(cfg.seg_dir);
+
+    std::string frame_id;
+
+    for (size_t i = 0; i < point_cloud_files.size(); ++i)
+    {
+        frame_id = point_cloud_files[i].stem().string();
+
+        std::cout << "\rExporting point clouds [" << (i + 1) << "/" << point_cloud_files.size() << "]" << std::flush;
+
+        auto [input_cloud, corr] = loadPointCloudXYZI(
+            point_cloud_files[i], cfg.use_fov_filter, cfg.fov_params);
+
+        if (!input_cloud || input_cloud->empty()) continue;
+
+        if (cfg.use_detections) {
+            auto det_it = detection_index.find(frame_id);
+            if (det_it != detection_index.end()) {
+                auto detections = loadDetections(det_it->second.string(), cfg.det_score, cfg.det_max_dist, cfg.det_classes);
+                auto filtered_cloud = filterPointCloud(input_cloud, detections);
+                
+                savePointCloudXYZI(det_out_dir / point_cloud_files[i].filename(), filtered_cloud);
+            } else {
+                throw std::runtime_error("Missing detections file for frame: " + frame_id);
+            }
+        }
+
+        if (cfg.use_seg) {
+            auto seg_it = seg_index.find(frame_id);
+            if (seg_it != seg_index.end()) {
+                auto sk_filtered_cloud = semantic_seg_filter(cfg.seg_classes, cfg.seg_max_dist, input_cloud, seg_it->second.string(), corr);
+                
+                savePointCloudXYZI(seg_out_dir / point_cloud_files[i].filename(), sk_filtered_cloud);
+            } else {
+                throw std::runtime_error("Missing semantic segmentation lbl file for frame: " + frame_id);
+            }
+        }
+    }
+    std::cout << '\n';
+}
+
 int main(int argc, char* argv[])
 {
     try
@@ -1168,15 +1235,15 @@ int main(int argc, char* argv[])
             }
         }
 
-        //std::cout << "[OK] configuration succesful\n";
-
-        //std::cout << "[INFO] loading timesatmps..." << std::flush;
-        std::vector<int64_t> timestamps = loadTimestamps(cfg.ts_file);
-        //std::cout << "\r[OK] timestamps loaded succesfully\n";
-
-        generate_rosbag(cfg, timestamps);
-
-        std::cout << "\n[OK] ROSBAG GENERATED SUCCESFULLY\n";
+        if (cfg.only_clouds) {
+            std::cout << "\n[INFO] Exporting filtered clouds directly to directory: " << cfg.clouds_out_dir << "\n";
+            export_clouds_to_directory(cfg);
+            std::cout << "\n[OK] POINT CLOUDS EXPORTED SUCCESSFULLY\n";
+        } else {
+            std::vector<int64_t> timestamps = loadTimestamps(cfg.ts_file);
+            generate_rosbag(cfg, timestamps);
+            std::cout << "\n[OK] ROSBAG GENERATED SUCCESFULLY\n";
+        }
 
         exit(EXIT_SUCCESS);
     }
