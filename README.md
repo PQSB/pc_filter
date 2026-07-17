@@ -86,7 +86,7 @@ Each filtering stage can be independently enabled or disabled.
 
 - C++17 or later
 
-## Required ROS packages
+<!-- ## Required ROS packages
 
 ```bash
 sudo apt install \
@@ -103,7 +103,7 @@ sudo apt install \
     libopencv-dev \
     libeigen3-dev
 ```
-
+-->
 ---
 
 # Building
