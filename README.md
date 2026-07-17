@@ -218,7 +218,7 @@ Objects below the configured score threshold are ignored.
 
 ## Timestamp File
 
-The timestamp file contains one timestamp per line expressed in seconds (e.g., the format used by the KITTI dataset).
+The timestamp file contains one timestamp per line, expressed in seconds (e.g., the format used by the KITTI Odometry dataset).
 
 Example:
 
