@@ -136,7 +136,7 @@ source install/setup.bash
 
 # Example Data Structure
 
-Example of directory structure:
+The following directory structure is provided as an example:
 
 ```
 ├── pointclouds/
@@ -163,13 +163,7 @@ Example of directory structure:
 
 └── calibration.txt
 ```
-
-Only the following files are mandatory:
-
-- Point cloud directory
-- Timestamp file
-
-The remaining files are optional depending on the enabled filters.
+Directory names are **only illustrative** and do not need to match those shown above. Their locations are specified through the corresponding command-line arguments.
 
 ---
 
