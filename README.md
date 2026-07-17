@@ -297,7 +297,8 @@ Depending on the selected configuration, the package may generate:
 ## Generate a ROS 2 bag with all supported data
 
 ```bash
-ros2 run pc_filter offline_pc_filter --pc_dir /pointclouds \
+ros2 run pc_filter offline_pc_filter \
+    --pc_dir /pointclouds \
     --pc_topic /original_clouds \
     --fov_filter fov_calib_file.txt \
     --seg_dir /labels --seg_classes 10,30,31,31 \
@@ -312,7 +313,8 @@ ros2 run pc_filter offline_pc_filter --pc_dir /pointclouds \
 ## Export filtered point clouds to disk
 
 ```bash
-ros2 run pc_filter offline_pc_filter --pc_dir /pointclouds
+ros2 run pc_filter offline_pc_filter \
+    --pc_dir /pointclouds \
     --fov_filter fov_calib_file.txt \
     --seg_dir /labels --seg_classes 10,30,31,31 \
     --seg_max_dist 20 \
