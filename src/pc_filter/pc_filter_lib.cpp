@@ -324,7 +324,7 @@ loadTimestamps(const fs::path& ts_file)
         timestamp_sec = std::stod(line);
 
         // Get the time in nanoseconds
-        timestamps_ns.push_back(static_cast<int64_t>(timestamp_sec * 1e9));
+        timestamps_ns.push_back(static_cast<int64_t>(std::llround(timestamp_sec * 1e9)));
     }
 
     // In case the timestamps file is empty
