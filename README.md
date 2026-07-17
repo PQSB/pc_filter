@@ -134,9 +134,9 @@ source install/setup.bash
 
 ---
 
-# Dataset Structure
+# Example Data Structure
 
-The expected directory structure is:
+Example of directory structure:
 
 ```
 ├── pointclouds/
