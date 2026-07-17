@@ -735,37 +735,35 @@ parse_arguments(int argc, char* argv[])
 
         // Input point clouds
         ("p,pc_dir", "Input point clouds folder path (REQUIRED)", cxxopts::value<fs::path>(cfg.pc_dir))
-        ("ts_file", "Timestamps file needed for rosbag messages headers (REQUIRED)", cxxopts::value<fs::path>(cfg.ts_file))
+        ("ts_file", "Timestamps file needed for rosbag messages headers (Required ONLY for rosbag output)", cxxopts::value<fs::path>(cfg.ts_file))
         ("pc_topic", "Input point clouds topic", cxxopts::value<std::string>(cfg.pc_topic))
 
         ("fov_filter", "Preprocessed file generated with prepare_fov_filter_calib_file.py", cxxopts::value<fs::path>())
 
-        // Output
-        ("rosbag_out", "Output rosbag path (Selects rosbag output)", cxxopts::value<fs::path>(cfg.rosbag_out))
+        // Output Modes (Mutually exclusive)
+        ("rosbag_out", "Output rosbag path (Selects rosbag output mode and cannot be used with only_clouds_out)", cxxopts::value<fs::path>(cfg.rosbag_out))
+        ("clouds_out_dir", "Output directory to save just the filtered clouds, no rosbag (Selects direct file output and cannot be used with rosbag_out)", cxxopts::value<fs::path>())
 
         // Images
         ("i,img_dir", "Input images folder path", cxxopts::value<fs::path>())
 
-        ("img_topic", "Input images topic", cxxopts::value<std::string>())
+        ("img_topic", "Input images topic (Required if img_dir is used)", cxxopts::value<std::string>())
 
         // Detector filter parameters
         ("det_dir", "Detections folder path [Detector argument]", cxxopts::value<fs::path>())
-        ("det_score", "Min score threshold [Detector argument]", cxxopts::value<double>())
+        ("det_score", "Minimum score threshold [Detector argument]", cxxopts::value<double>())
         ("det_topic", "Filtered point clouds topic name [Detector argument]", cxxopts::value<std::string>())
         ("det_max_dist", "Maximum detection distance [Detector argument]", cxxopts::value<double>())
         ("det_classes", "Classes to filter (c1,c2,c3,...) [Detector argument]", cxxopts::value<std::vector<std::string>>())
 
         // Semantic segmentation filter parameters
         ("seg_dir", "Semantic segmentation labels folder path [Segmentation argument]", cxxopts::value<fs::path>())
-        ("seg_topic", "Filtered point clouds topic name [Segmentation argument]", cxxopts::value<std::string>())
+        ("seg_topic", "Filtered point clouds topic name (Required ONLY for rosbag output) [Segmentation argument]", cxxopts::value<std::string>())
         ("seg_classes", "ID of the classes to filter (id1,id2,id3,...) [Segmentation argument]", cxxopts::value<std::vector<std::string>>())
         ("seg_max_dist", "Maximum point distance to filter[Segmentation argument]", cxxopts::value<double>())
 
         // Skips argument user confirmation (to allow fast executions)
         ("no_confirm", "Skips the user arguments confirmation (NOTE: pure flag; any provided value using '=' will be ignored and treated as true")
-
-        // To export just filtered clouds directly to a file without generating a new rosbag
-        ("clouds_out_dir", "Output directory to save just the filtered clouds, no rosbag (Selects files output)", cxxopts::value<fs::path>())
 
         ("h,help", "Show help");
 
