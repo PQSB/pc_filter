@@ -1,10 +1,9 @@
 cmake_minimum_required(VERSION 3.8)
 project(pc_filter)
 
-# --- NUEVO: Forzar C++17 para poder usar <filesystem> ---
-if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 17)
-endif()
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+#set(CMAKE_CXX_EXTENSIONS OFF)
 # --------------------------------------------------------
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -13,23 +12,25 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-find_package(rclcpp REQUIRED)
-find_package(sensor_msgs REQUIRED)
-find_package(pcl_ros REQUIRED)
 
-# --- NUEVO: Buscar los paquetes que faltaban por tus includes ---
+find_package(rclcpp REQUIRED)
+
+find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+
 find_package(rosbag2_cpp REQUIRED)
 find_package(rosbag2_storage REQUIRED)
+
 find_package(pcl_conversions REQUIRED)
 find_package(PCL REQUIRED)
+
 find_package(Eigen3 REQUIRED)
-find_package(visualization_msgs REQUIRED)
 
 find_package(OpenCV REQUIRED)
 find_package(cv_bridge REQUIRED)
 # ----------------------------------------------------------------
 
-# Para gestión de argumentos
+# For argument management
 include(FetchContent)
 fetchcontent_declare(cxxopts
   GIT_REPOSITORY  https://github.com/jarro2783/cxxopts
@@ -37,29 +38,17 @@ fetchcontent_declare(cxxopts
 )
 FetchContent_MakeAvailable(cxxopts)
 
-
-if(POLICY CMP0074)
-  cmake_policy(SET CMP0074 NEW)
-endif()
-
-if(POLICY CMP0144)
-  cmake_policy(SET CMP0144 NEW)
-endif()
-
-# --- NUEVO: Añadir los paquetes de ROS a la lista de dependencias ament ---
 set(dependencies
   rclcpp
   sensor_msgs
-  pcl_ros
+  std_msgs
   rosbag2_cpp
   rosbag2_storage
   pcl_conversions
-  visualization_msgs
   cv_bridge
 )
 # --------------------------------------------------------------------------
 
-# --- NUEVO: Configurar macros y directorios de PCL ---
 add_definitions(${PCL_DEFINITIONS})
 include_directories(include ${PCL_INCLUDE_DIRS})
 link_directories(${PCL_LIBRARY_DIRS})
@@ -69,7 +58,6 @@ add_library(${PROJECT_NAME} SHARED
   src/pc_filter/PCFilterNode.cpp
 )
 ament_target_dependencies(${PROJECT_NAME} ${dependencies})
-# --- NUEVO: Enlazar PCL y Eigen a la librería principal ---
 target_link_libraries(${PROJECT_NAME} ${PCL_LIBRARIES} Eigen3::Eigen cxxopts)
 
 # Add my library
@@ -77,7 +65,6 @@ add_library(pc_filter_lib SHARED
   src/pc_filter/pc_filter_lib.cpp 
 )
 ament_target_dependencies(pc_filter_lib ${dependencies})
-# --- NUEVO: Enlazar PCL y Eigen a tu librería ---
 target_link_libraries(pc_filter_lib ${PCL_LIBRARIES} Eigen3::Eigen)
 
 # add_executable(rosbag_pc_filter src/filter_cloud_by_detections.cpp)
@@ -85,10 +72,9 @@ target_link_libraries(pc_filter_lib ${PCL_LIBRARIES} Eigen3::Eigen)
 # # --- NUEVO: Enlazar PCL y Eigen al nodo ejecutable ---
 # target_link_libraries(rosbag_pc_filter ${PROJECT_NAME} pc_filter_lib ${PCL_LIBRARIES} Eigen3::Eigen)
 
-add_executable(dataset_pc_filter src/filter_cloud_by_detections_from_dataset.cpp)
-ament_target_dependencies(dataset_pc_filter ${dependencies})
-# --- NUEVO: Enlazar PCL y Eigen al nodo ejecutable ---
-target_link_libraries(dataset_pc_filter ${PROJECT_NAME} pc_filter_lib ${PCL_LIBRARIES} Eigen3::Eigen)
+add_executable(offline_pc_filter src/filter_cloud_by_detections_from_dataset.cpp)
+ament_target_dependencies(offline_pc_filter ${dependencies})
+target_link_libraries(offline_pc_filter ${PROJECT_NAME} pc_filter_lib ${PCL_LIBRARIES} Eigen3::Eigen)
 
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
@@ -96,7 +82,7 @@ install(DIRECTORY include/ DESTINATION include)
 install(TARGETS
   ${PROJECT_NAME}
   #rosbag_pc_filter
-  dataset_pc_filter
+  offline_pc_filter
   pc_filter_lib
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib

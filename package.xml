@@ -4,26 +4,20 @@
   <name>pc_filter</name>
   <version>0.0.0</version>
   <description>Point cloud filter</description>
-  <maintainer email="a.galea2022@alumnos.urjc.es">psb</maintainer>
-  <license>Apache License, Version 2.0</license>
+  <maintainer email="a.galea2022@alumnos.urjc.es">Andrés</maintainer>
+  <license>GPL-3.0-only</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
+
   <depend>sensor_msgs</depend>
-  <depend>pcl_ros</depend>
-  <depend>visualization_msgs</depend>
+  <depend>std_msgs</depend>
 
   <depend>rosbag2_cpp</depend>
   <depend>rosbag2_storage</depend>
-  <depend>pcl_conversions</depend>
-  <build_depend>libpcl-all-dev</build_depend>
-  <exec_depend>libpcl-all</exec_depend>
-  <build_depend>eigen</build_depend>
-  <exec_depend>eigen</exec_depend>
 
-  <build_depend>opencv</build_depend>
-  <exec_depend>opencv</exec_depend>
+  <depend>pcl_conversions</depend>
   <depend>cv_bridge</depend>
 
   <test_depend>ament_lint_auto</test_depend>
