@@ -72,7 +72,7 @@ target_link_libraries(pc_filter_lib ${PCL_LIBRARIES} Eigen3::Eigen)
 # # --- NUEVO: Enlazar PCL y Eigen al nodo ejecutable ---
 # target_link_libraries(rosbag_pc_filter ${PROJECT_NAME} pc_filter_lib ${PCL_LIBRARIES} Eigen3::Eigen)
 
-add_executable(offline_pc_filter src/filter_cloud_by_detections_from_dataset.cpp)
+add_executable(offline_pc_filter src/offline_pc_filter.cpp)
 ament_target_dependencies(offline_pc_filter ${dependencies})
 target_link_libraries(offline_pc_filter ${PROJECT_NAME} pc_filter_lib ${PCL_LIBRARIES} Eigen3::Eigen)
 
