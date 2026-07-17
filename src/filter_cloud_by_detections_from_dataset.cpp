@@ -33,30 +33,6 @@
 
 constexpr double MAX_DIST_DEFAULT = -1.0;
 
-const std::unordered_map<std::string, int> semantic_kitti_classes = {
-    // Static
-    {"unlabeled", 0}, {"outlier", 1}, {"car", 10}, {"bicycle", 11}, {"bus", 13}, {"motorcycle", 15},
-    {"on-rails", 16}, {"truck", 17}, {"other-vehicle", 20},
-
-    // Static
-    {"person", 30},{"bicyclist", 31},{"motorcyclist", 32},
-
-    // Terrain and road
-    {"road", 40}, {"parking", 44}, {"sidewalk", 48}, {"other-ground", 49},
-
-    // Vegetation and structures
-    {"building", 50}, {"fence", 51}, {"other-structure", 52}, {"lane-marking", 60},
-    {"vegetation", 70}, {"trunk", 71}, {"terrain", 72},
-
-    // Objects
-    {"pole", 80}, {"traffic-sign", 81}, {"other-object", 99},
-
-    // Dynamic classes
-    {"moving-car", 252}, {"moving-bicyclist", 253}, {"moving-person", 254},
-    {"moving-motorcyclist", 255}, {"moving-on-rails", 256}, {"moving-bus", 257},
-    {"moving-truck", 258}, {"moving-other-vehicle", 259}
-};
-
 namespace fs = std::filesystem;
 
 struct FovCalibration
@@ -101,7 +77,7 @@ struct Config
     bool use_seg = false;
     fs::path seg_dir;
     std::string seg_topic;
-    std::unordered_set<std::string> seg_classes;
+    std::unordered_set<uint16_t> seg_classes;
     double seg_max_dist = MAX_DIST_DEFAULT;
 
     bool no_confirm;
@@ -113,7 +89,7 @@ struct Config
 
 pcl::PointCloud<pcl::PointXYZI>::Ptr
 semantic_seg_filter(
-  const std::unordered_set<std::string>& classes2filter,
+  const std::unordered_set<uint16_t>& classes2filter,
   double seg_max_dist, 
   pcl::PointCloud<pcl::PointXYZI>::Ptr& input_cloud,
   fs::path lbl_path,
@@ -125,18 +101,6 @@ semantic_seg_filter(
     std::ifstream label_file(lbl_path, std::ios::binary);
     if (!label_file.is_open()) {
         throw std::runtime_error("[ERROR] Cannot open semantic segmentation lbl file: " + lbl_path.string());
-    }
-
-    std::unordered_set<uint16_t> numeric_ids_to_remove;
-
-    // Change classes to filter from string to the numeric id
-    for (const std::string& name : classes2filter) {
-        auto it = semantic_kitti_classes.find(name);
-        if (it != semantic_kitti_classes.end()) {
-            numeric_ids_to_remove.insert(it->second);
-        } else {
-            throw std::runtime_error("[ERROR] ID " + name + "is not in the provided ones");
-        }
     }
 
     std::vector<uint16_t> all_labels;
@@ -173,7 +137,7 @@ semantic_seg_filter(
         uint16_t semantic_class = all_labels[orig_idx];
 
         // Check if the point is valid and add it in case it is
-        if (numeric_ids_to_remove.find(semantic_class) == numeric_ids_to_remove.end()) {
+        if (classes2filter.find(semantic_class) == classes2filter.end()) {
             filtered_cloud->push_back(input_cloud->points[i]);
         }
     }
@@ -759,8 +723,8 @@ parse_arguments(int argc, char* argv[])
         // Semantic segmentation filter parameters
         ("seg_dir", "Semantic segmentation labels folder path [Segmentation argument]", cxxopts::value<fs::path>())
         ("seg_topic", "Filtered point clouds topic name (Required ONLY for rosbag output) [Segmentation argument]", cxxopts::value<std::string>())
-        ("seg_classes", "ID of the classes to filter (id1,id2,id3,...) [Segmentation argument]", cxxopts::value<std::vector<std::string>>())
-        ("seg_max_dist", "Maximum point distance to filter[Segmentation argument]", cxxopts::value<double>())
+        ("seg_classes", "ID of the classes to filter (id1,id2,id3,...) [Segmentation argument]", cxxopts::value<std::vector<uint16_t>>())
+        ("seg_max_dist", "Maximum point distance to filter [Segmentation argument]", cxxopts::value<double>())
 
         // Skips argument user confirmation (to allow fast executions)
         ("no_confirm", "Skips the user arguments confirmation (NOTE: pure flag; any provided value using '=' will be ignored and treated as true")
@@ -843,8 +807,8 @@ parse_arguments(int argc, char* argv[])
         }
 
         if (result.count("seg_classes")) {
-            auto class_vec = result["seg_classes"].as<std::vector<std::string>>();
-            cfg.seg_classes = std::unordered_set<std::string>(class_vec.begin(), class_vec.end());
+            auto id_vec = result["seg_classes"].as<std::vector<uint16_t>>();
+            cfg.seg_classes = std::unordered_set<uint16_t>(id_vec.begin(), id_vec.end());
         }
 
         if (result.count("seg_max_dist")) {
@@ -998,16 +962,28 @@ writeRosbag(
     if (cfg.use_images)
     {
         image_index = buildFileIndex(cfg.img_dir);
+        if (image_index.size() != files.size()) {
+            throw std::runtime_error("Number of point clouds (" + std::to_string(files.size()) + 
+                ") does not match number of images (" + std::to_string(image_index.size()) + ")");
+        }
     }
 
     if (cfg.use_detections)
     {
         detection_index = buildFileIndex(cfg.det_dir);
+        if (detection_index.size() != files.size()) {
+            throw std::runtime_error("Number of point clouds (" + std::to_string(files.size()) + 
+                ") does not match number of detections (" + std::to_string(detection_index.size()) + ")");
+        }
     }
 
     if (cfg.use_seg)
     {
         seg_index = buildFileIndex(cfg.seg_dir);
+        if (seg_index.size() != files.size()) {
+            throw std::runtime_error("Number of point clouds (" + std::to_string(files.size()) + 
+                ") does not match number of semantic segmentation labels (" + std::to_string(seg_index.size()) + ")");
+        }
     }
 
     std::string frame_id;
@@ -1153,7 +1129,7 @@ export_clouds_to_directory(const Config& cfg)
     fs::path det_out_dir;
     fs::path seg_out_dir;
 
-    // Crear subcarpetas según los filtros activos
+    // Create subcfolders for the active filters
     if (cfg.use_detections) {
         det_out_dir = cfg.clouds_out_dir / "detections";
         fs::create_directories(det_out_dir);
@@ -1166,8 +1142,21 @@ export_clouds_to_directory(const Config& cfg)
     std::unordered_map<std::string, fs::path> detection_index;
     std::unordered_map<std::string, fs::path> seg_index;
 
-    if (cfg.use_detections) detection_index = buildFileIndex(cfg.det_dir);
-    if (cfg.use_seg) seg_index = buildFileIndex(cfg.seg_dir);
+    if (cfg.use_detections) {
+        detection_index = buildFileIndex(cfg.det_dir);
+        if (detection_index.size() != point_cloud_files.size()) {
+            throw std::runtime_error("Number of point clouds (" + std::to_string(point_cloud_files.size()) + 
+                                     ") does not match number of detections (" + std::to_string(detection_index.size()) + ")");
+        }
+    }
+
+    if (cfg.use_seg) {
+        seg_index = buildFileIndex(cfg.seg_dir);
+        if (seg_index.size() != point_cloud_files.size()) {
+            throw std::runtime_error("Number of point clouds (" + std::to_string(point_cloud_files.size()) + 
+                                     ") does not match number of semantic segmentation labels (" + std::to_string(seg_index.size()) + ")");
+        }
+    }
 
     std::string frame_id;
 
