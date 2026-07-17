@@ -310,7 +310,7 @@ ros2 run pc_filter offline_pc_filter \
     --rosbag_out out_rosbag
 ```
 
-## Export filtered point clouds to disk
+## Export filtered point clouds to disk with all supported data
 
 ```bash
 ros2 run pc_filter offline_pc_filter \
