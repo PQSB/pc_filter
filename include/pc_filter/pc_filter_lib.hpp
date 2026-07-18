@@ -40,7 +40,6 @@ struct FovCalibration
 
 struct Config
 {
-    // Neccesary
     fs::path pc_dir;
     fs::path rosbag_out;
     fs::path ts_file;
