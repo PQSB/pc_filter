@@ -340,4 +340,9 @@ Example:
 - The timestamp file must contain exactly one timestamp per point cloud.
 
 - Images, detections and semantic labels must contain the same number of frames as the point cloud sequence.
+
 ---
+
+# License
+
+This project is distributed under the terms of the LICENSE file included in this repository.
