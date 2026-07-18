@@ -230,13 +230,16 @@ Example:
 ```
 ---
 
-## Camera Calibration
+## FoV Calibration file
 
 The calibration file must contain:
 
 1. Image width and height
 2. Projection matrix **P2**
 3. LiDAR-to-camera transformation matrix **Tr_velo_to_cam**
+
+This file can be generated using the `prepare_fov_filter_calib_file.py` utility from the
+[`pc_filter_tools`](https://github.com/PQSB/pc_filter_tools) repository.
 
 Example:
 
