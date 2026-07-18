@@ -59,7 +59,7 @@ struct Config
     fs::path img_dir;
     std::string img_topic;
 
-    // 3D-MOOD detections
+    // Detector
     bool use_detections = false;
     fs::path det_dir;
     double det_score{};
